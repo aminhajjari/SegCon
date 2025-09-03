@@ -6,7 +6,7 @@
 #SBATCH --mem=64G                       # Increased for ConceptCLIP and image processing
 #SBATCH --gres=gpu:1                    # GPU required for SAM2 and ConceptCLIP
 #SBATCH --time=04:00:00                 # Increased time for full dataset processing
-#SBATCH --mail-user=jamal73sm@gmail.com
+#SBATCH --mail-user=aminhjjr@gmail.com
 #SBATCH --mail-type=ALL
 
 # Print job information
