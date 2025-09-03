@@ -1,0 +1,44 @@
+# Core ML/AI Libraries
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.30.0
+huggingface-hub>=0.16.0
+
+# Computer Vision and Image Processing
+opencv-python>=4.8.0
+Pillow>=10.0.0
+scikit-image>=0.21.0
+SimpleITK>=2.2.0
+
+# Medical Imaging
+pydicom>=2.4.0
+nibabel>=5.1.0
+
+# SAM2 (Segment Anything Model 2)
+# Note: Install from source or specific repo
+# git+https://github.com/facebookresearch/segment-anything-2.git
+
+# Data Processing and Analysis
+numpy>=1.24.0
+pandas>=2.0.0
+tqdm>=4.65.0
+
+# Visualization and Plotting
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Utilities
+pathlib2>=2.3.7; python_version<'3.4'
+
+# Optional but recommended for better performance
+# CUDA-enabled PyTorch (if using GPU)
+# Install with: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+# Development and Testing (optional)
+pytest>=7.4.0
+jupyter>=1.0.0
+ipykernel>=6.25.0
+
+# System dependencies (install via system package manager)
+# Ubuntu/Debian: sudo apt-get install libgl1-mesa-glx libglib2.0-0
+# CentOS/RHEL: sudo yum install mesa-libGL glib2
