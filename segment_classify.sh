@@ -6,7 +6,7 @@
 #SBATCH --mem=64G                       # Increased for ConceptCLIP and image processing
 #SBATCH --gres=gpu:1                    # GPU required for SAM2 and ConceptCLIP
 #SBATCH --time=04:00:00                 # Increased time for full dataset processing
-#SBATCH --mail-user=aminhjjr@gmail.com
+#SBATCH --mail-user=jamal73sm@gmail.com
 #SBATCH --mail-type=ALL
 
 # Print job information
@@ -50,7 +50,18 @@ mkdir -p $TORCH_HOME
 # Updated to match your actual virtual environment location
 source /project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/venv/bin/activate
 
-# Print environment information
+# Install SAM2 if not already installed (only runs once)
+echo "Checking SAM2 installation..."
+python -c "import sam2" 2>/dev/null || {
+    echo "Installing SAM2..."
+    pip install git+https://github.com/facebookresearch/segment-anything-2.git
+}
+
+# Verify installations
+echo "Verifying installations..."
+python -c "import torch; print(f'PyTorch: {torch.__version__}')"
+python -c "import sam2; print('SAM2: ✓')" 2>/dev/null || echo "SAM2: ✗ Failed"
+python -c "import transformers; print(f'Transformers: {transformers.__version__}')"
 echo "Python version: $(python --version)"
 echo "Python path: $(which python)"
 echo "CUDA available: $(python -c "import torch; print(torch.cuda.is_available())")"
