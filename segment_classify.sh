@@ -6,7 +6,7 @@
 #SBATCH --mem=64G                       # Increased for ConceptCLIP and image processing
 #SBATCH --gres=gpu:1                    # GPU required for SAM2 and ConceptCLIP
 #SBATCH --time=04:00:00                 # Increased time for full dataset processing
-#SBATCH --mail-user=amminhajjari@gmail.com
+#SBATCH --mail-user=aminhjjr@gmail.com
 #SBATCH --mail-type=ALL
 
 # Print job information
@@ -48,7 +48,7 @@ mkdir -p $TORCH_HOME
 
 # Activate your Python virtual environment
 # Update this path to match your actual virtual environment location
-source /project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegmnetationConceptCLIP/venv/bin/activate
+source /project/def-arashmoh/shahab33/XAI/milk10k_env/bin/activate
 
 # Print environment information
 echo "Python version: $(python --version)"
@@ -89,7 +89,7 @@ fi
 
 # Optional: Print output directory contents
 echo "Output directory contents:"
-ls -la /project/def-arashmoh/shahab33/XAI/outputs/
+ls -la /project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegmnetationConceptCLIP/SegCon/outputs/
 
 echo "Segmented outputs for ConceptCLIP:"
-ls -la /project/def-arashmoh/shahab33/XAI/outputs/segmented_for_conceptclip/ | head -10
+ls -la /project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegmnetationConceptCLIP/SegCon/outputs/segmented_for_conceptclip/ | head -10
