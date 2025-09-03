@@ -27,10 +27,12 @@ warnings.filterwarnings('ignore')
 
 # ==================== CONFIGURATION ====================
 
-# Your dataset paths
+# Update these paths in your path.py file
+
+# Your dataset paths (UPDATE THESE IN YOUR path.py)
 DATASET_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_Input"
-GROUNDTRUTH_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/groundtruth.csv"
-OUTPUT_PATH = "/project/def-arashmoh/shahab33/XAI/outputs"
+GROUNDTRUTH_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/groundtruth.csv"  
+OUTPUT_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegCon/outputs"
 
 # ==================== HUGGING FACE AUTHENTICATION ====================
 
