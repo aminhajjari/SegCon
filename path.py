@@ -1,5 +1,6 @@
 # MILK10k Medical Image Segmentation and Classification Pipeline
 # Processes MILK10k dataset: segmentation → ConceptCLIP classification
+# Using locally installed SAM2 and ConceptCLIP models
 
 import os
 import cv2
@@ -12,8 +13,6 @@ import nibabel as nib
 import SimpleITK as sitk
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 from collections import Counter, defaultdict
-from transformers import AutoModel, AutoProcessor, pipeline
-from huggingface_hub import login
 from PIL import Image
 import json
 import matplotlib.pyplot as plt
@@ -25,9 +24,9 @@ from skimage import filters, morphology, measure
 import warnings
 warnings.filterwarnings('ignore')
 
-# ==================== CONFIGURATION ====================
-
-# Update these paths in your path.py file
+# Import local ConceptCLIP models
+from ConceptModel import modeling_conceptclip
+from ConceptModel import preprocessor_conceptclip
 
 # ==================== CONFIGURATION ====================
 
@@ -36,58 +35,51 @@ DATASET_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10
 GROUNDTRUTH_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/groundtruth.csv"
 OUTPUT_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/outputs"
 
-# ==================== HUGGING FACE AUTHENTICATION ====================
+# Local model paths (update these to your actual paths)
+SAM2_MODEL_PATH = "/path/to/your/sam2/model"  # Update this path
+CONCEPTCLIP_MODEL_PATH = "/path/to/your/conceptclip/model"  # Update this path
 
-def setup_huggingface_auth():
-    """Setup Hugging Face authentication"""
-    print("Setting up Hugging Face authentication...")
-    
-    # Method 1: Environment variable
-    hf_token = os.environ.get('HF_TOKEN')
-    if hf_token:
-        print("Found HF_TOKEN in environment variables")
-        login(token=hf_token, new_session=False)
-        return True
-    
-    # Method 2: Interactive login
-    try:
-        login(new_session=False)
-        print("Hugging Face login successful")
-        return True
-    except Exception as e:
-        print(f"Interactive login failed: {e}")
-    
-    print("Please set up authentication using HF_TOKEN environment variable")
-    return False
+# ==================== LOCAL MODEL LOADING ====================
 
-def load_conceptclip_models(device):
-    """Load ConceptCLIP models with proper error handling"""
+def load_local_conceptclip_models(model_path: str, device: str):
+    """Load local ConceptCLIP models"""
     try:
-        print("Loading ConceptCLIP models...")
+        print("Loading local ConceptCLIP models...")
         
-        # Load model
-        model = AutoModel.from_pretrained(
-            'JerrryNie/ConceptCLIP',
-            trust_remote_code=True,
-            torch_dtype="auto",
-            device_map="auto"
-        )
-        
-        # Load processor  
-        processor = AutoProcessor.from_pretrained(
-            'JerrryNie/ConceptCLIP',
-            trust_remote_code=True
-        )
+        # Load model using local implementation
+        model = modeling_conceptclip.ConceptCLIPModel.from_pretrained(model_path)
+        processor = preprocessor_conceptclip.ConceptCLIPProcessor.from_pretrained(model_path)
         
         # Move to device
         model = model.to(device)
+        model.eval()  # Set to evaluation mode
         
         print(f"ConceptCLIP loaded successfully on {device}")
         return model, processor
         
     except Exception as e:
-        print(f"Error loading ConceptCLIP: {e}")
-        print("Make sure you're authenticated with Hugging Face")
+        print(f"Error loading local ConceptCLIP: {e}")
+        print("Please check your ConceptCLIP model path and installation")
+        raise e
+
+def load_local_sam2_model(model_path: str):
+    """Load local SAM2 model"""
+    try:
+        print("Loading local SAM2 model...")
+        
+        # Load SAM2 from local installation
+        if os.path.exists(model_path):
+            predictor = SAM2ImagePredictor.from_pretrained(model_path)
+        else:
+            # Fallback to default SAM2 model name if path doesn't exist
+            predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2-hiera-large")
+        
+        print("SAM2 loaded successfully")
+        return predictor
+        
+    except Exception as e:
+        print(f"Error loading local SAM2: {e}")
+        print("Please check your SAM2 model path and installation")
         raise e
 
 # ==================== MILK10k DOMAIN CONFIGURATION ====================
@@ -139,10 +131,13 @@ MILK10K_DOMAIN = MedicalDomain(
 class MILK10kPipeline:
     """MILK10k segmentation and classification pipeline"""
     
-    def __init__(self, dataset_path: str, groundtruth_path: str, output_path: str):
+    def __init__(self, dataset_path: str, groundtruth_path: str, output_path: str, 
+                 sam2_model_path: str = None, conceptclip_model_path: str = None):
         self.dataset_path = Path(dataset_path)
         self.groundtruth_path = groundtruth_path
         self.output_path = Path(output_path)
+        self.sam2_model_path = sam2_model_path or SAM2_MODEL_PATH
+        self.conceptclip_model_path = conceptclip_model_path or CONCEPTCLIP_MODEL_PATH
         self.domain = MILK10K_DOMAIN
         
         # Create output directories
@@ -164,18 +159,15 @@ class MILK10kPipeline:
         self._load_ground_truth()
         
     def _load_models(self):
-        """Load SAM2 and ConceptCLIP models"""
-        # Setup Hugging Face authentication
-        if not setup_huggingface_auth():
-            raise ValueError("Hugging Face authentication failed")
+        """Load local SAM2 and ConceptCLIP models"""
         
-        # Load SAM2
-        print("Loading SAM2 model...")
-        self.sam_predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2-hiera-large")
-        print("SAM2 loaded successfully")
+        # Load local SAM2
+        self.sam_predictor = load_local_sam2_model(self.sam2_model_path)
         
-        # Load ConceptCLIP
-        self.conceptclip_model, self.conceptclip_processor = load_conceptclip_models(self.device)
+        # Load local ConceptCLIP
+        self.conceptclip_model, self.conceptclip_processor = load_local_conceptclip_models(
+            self.conceptclip_model_path, self.device
+        )
         
     def _load_ground_truth(self):
         """Load ground truth annotations"""
@@ -373,7 +365,7 @@ class MILK10kPipeline:
         return outputs
     
     def classify_segmented_image(self, segmented_outputs: Dict[str, np.ndarray]) -> Dict:
-        """Classify using ConceptCLIP on segmented outputs"""
+        """Classify using local ConceptCLIP on segmented outputs"""
         try:
             results = {}
             
@@ -382,17 +374,33 @@ class MILK10kPipeline:
                 if seg_image is not None and seg_image.size > 0:
                     seg_pil = Image.fromarray(seg_image.astype(np.uint8))
                     
+                    # Use local ConceptCLIP processor
                     inputs = self.conceptclip_processor(
                         images=seg_pil, 
                         text=self.domain.text_prompts,
                         return_tensors='pt',
                         padding=True,
                         truncation=True
-                    ).to(self.device)
+                    )
+                    
+                    # Move inputs to device
+                    inputs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v 
+                             for k, v in inputs.items()}
                     
                     with torch.no_grad():
                         outputs = self.conceptclip_model(**inputs)
-                        logits = (outputs['logit_scale'] * outputs['image_features'] @ outputs['text_features'].t()).softmax(dim=-1)[0]
+                        
+                        # Extract logits based on ConceptCLIP output structure
+                        if hasattr(outputs, 'logits_per_image'):
+                            logits = outputs.logits_per_image.softmax(dim=-1)[0]
+                        elif hasattr(outputs, 'similarity_scores'):
+                            logits = outputs.similarity_scores.softmax(dim=-1)[0]
+                        else:
+                            # Fallback: compute similarity manually
+                            image_features = outputs['image_features']
+                            text_features = outputs['text_features']
+                            logit_scale = outputs.get('logit_scale', torch.tensor(1.0))
+                            logits = (logit_scale * image_features @ text_features.t()).softmax(dim=-1)[0]
                     
                     # Convert to probabilities
                     disease_names = [prompt.split(' showing ')[-1] for prompt in self.domain.text_prompts]
@@ -697,11 +705,13 @@ class MILK10kPipeline:
 def main():
     """Main execution function"""
     
-    # Initialize pipeline
+    # Initialize pipeline with local models
     pipeline = MILK10kPipeline(
         dataset_path=DATASET_PATH,
         groundtruth_path=GROUNDTRUTH_PATH,
-        output_path=OUTPUT_PATH
+        output_path=OUTPUT_PATH,
+        sam2_model_path=SAM2_MODEL_PATH,
+        conceptclip_model_path=CONCEPTCLIP_MODEL_PATH
     )
     
     # Process dataset
