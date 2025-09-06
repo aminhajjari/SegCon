@@ -201,7 +201,7 @@ cleanup() {
 trap cleanup EXIT SIGTERM SIGINT
 
 # Update the Python script name to match your actual file
-python milk10k_pipeline.py  # Change this to your actual Python file name
+python milk10k_pipeline_local.py  # ← UPDATE THIS TO YOUR ACTUAL PYTHON FILE NAME
 
 # Check if the script completed successfully
 if [ $? -eq 0 ]; then
