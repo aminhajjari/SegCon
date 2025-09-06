@@ -189,6 +189,17 @@ echo "=========================================="
 echo "Starting MILK10k Pipeline with Local Models..."
 echo "=========================================="
 
+# Setup cleanup trap for better resource management
+cleanup() {
+    echo "Job interrupted or finished, cleaning up..."
+    # Clean temporary files
+    if [ -d "$SLURM_TMPDIR" ]; then
+        rm -rf $SLURM_TMPDIR/*
+    fi
+    echo "Cleanup completed."
+}
+trap cleanup EXIT SIGTERM SIGINT
+
 # Update the Python script name to match your actual file
 python milk10k_pipeline.py  # Change this to your actual Python file name
 
