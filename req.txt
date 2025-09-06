@@ -1,52 +1,45 @@
 # ================================================================
-# MILK10k Pipeline - Narval (Compute Canada) Requirements
-# Install with: pip install --no-index -r requirements_narval.txt
-# For packages not available locally, remove --no-index flag
+# MILK10k Pipeline - Narval Requirements (Local Models Setup)
+# SAM2: Installed in editable mode in virtual environment
+# ConceptCLIP: Local module (not installed package)
 # ================================================================
 
-# Core ML/AI Libraries (available on Compute Canada)
+# Core ML/AI Libraries (available on Compute Canada with --no-index)
 torch>=2.0.0
 torchvision>=0.15.0
 numpy>=1.24.0
 scipy>=1.11.0
 
-# Computer Vision and Image Processing (available on Compute Canada)
+# Computer Vision and Image Processing (available with --no-index)
 opencv-python>=4.8.0
 Pillow>=10.0.0
 scikit-image>=0.21.0
 scikit-learn>=1.3.0
 
-# Data Processing (available on Compute Canada)
+# Data Processing (available with --no-index)
 pandas>=2.0.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
 tqdm>=4.65.0
 
-# Medical Imaging (may need PyPI installation)
+# Medical Imaging (install from PyPI - remove --no-index)
 pydicom>=2.4.0
 nibabel>=5.1.0
 SimpleITK>=2.2.0
 
-# Transformers and NLP (install from PyPI)
+# Transformers and NLP (install from PyPI for ConceptCLIP AutoModel support)
 transformers>=4.30.0
 tokenizers>=0.13.0
 huggingface-hub>=0.16.0
 safetensors>=0.3.0
 
-# Utilities (install from PyPI)
+# Additional utilities (install from PyPI)
 einops>=0.6.0
-plotly>=5.15.0
 psutil>=5.9.0
-json5>=0.9.14
 pyyaml>=6.0
 
-# Development tools (optional)
-pytest>=7.4.0
-jupyter>=1.0.0
-ipykernel>=6.25.0
-
 # ================================================================
-# Installation Instructions for Narval:
+# Installation Instructions for Narval (Updated for Local Models):
 # ================================================================
 # 
 # 1. Setup environment:
@@ -56,18 +49,31 @@ ipykernel>=6.25.0
 #    source milk10k_env/bin/activate
 #    pip install --no-index --upgrade pip
 #
-# 2. Install Compute Canada packages first:
+# 2. Install SAM2 in editable mode (ALREADY DONE):
+#    cd /project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/segment-anything-2
+#    pip install -e .
+#    # This makes SAM2 available as: from sam2.sam2_image_predictor import SAM2ImagePredictor
+#
+# 3. Setup ConceptCLIP local module (ALREADY DONE):
+#    # ConceptModel directory with __init__.py exists at:
+#    # /project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/ConceptModel/
+#    # Contains: modeling_conceptclip.py, preprocessor_conceptclip.py, __init__.py
+#
+# 4. Install Compute Canada packages first:
 #    pip install --no-index torch torchvision numpy pandas scipy
 #    pip install --no-index matplotlib scikit-learn scikit-image
 #    pip install --no-index opencv-python Pillow tqdm seaborn
-#    pip install --no-index pydicom nibabel
+#    pip install --no-index pydicom nibabel  # May need PyPI fallback
 #
-# 3. Install remaining packages from PyPI:
-#    pip install transformers tokenizers huggingface-hub
-#    pip install SimpleITK einops safetensors
-#    pip install plotly psutil json5 pyyaml
+# 5. Install remaining packages from PyPI:
+#    pip install transformers tokenizers huggingface-hub safetensors
+#    pip install SimpleITK einops psutil pyyaml
 #
-# 4. For packages that fail, try individual installation:
-#    pip install <package_name>  # without --no-index
+# 6. Verify installations:
+#    python -c "from sam2.sam2_image_predictor import SAM2ImagePredictor; print('SAM2: OK')"
+#    python -c "from ConceptModel import modeling_conceptclip; print('ConceptCLIP: OK')"
 #
+# ================================================================
+# Note: ConceptCLIP is NOT in pip list because it's a local module
+# SAM2 IS in pip list because it's installed in editable mode
 # ================================================================
