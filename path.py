@@ -30,14 +30,12 @@ from ConceptModel import preprocessor_conceptclip
 
 # ==================== CONFIGURATION ====================
 
-# Your dataset paths
+# These should be correct in your path.py:
 DATASET_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_Input"
 GROUNDTRUTH_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/groundtruth.csv"
 OUTPUT_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/outputs"
-
-# Local model paths (update these to your actual paths)
-SAM2_MODEL_PATH = "/path/to/your/sam2/model"  # Update this path
-CONCEPTCLIP_MODEL_PATH = "/path/to/your/conceptclip/model"  # Update this path
+SAM2_MODEL_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/segment-anything-2"
+CONCEPTCLIP_MODEL_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/ConceptModel"
 
 # ==================== LOCAL MODEL LOADING ====================
 
