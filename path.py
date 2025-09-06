@@ -374,7 +374,7 @@ class MILK10kPipeline:
                 if seg_image is not None and seg_image.size > 0:
                     seg_pil = Image.fromarray(seg_image.astype(np.uint8))
                     
-                    # Use local ConceptCLIP processor
+                    # Use local ConceptCLIP processor with AutoProcessor
                     inputs = self.conceptclip_processor(
                         images=seg_pil, 
                         text=self.domain.text_prompts,
@@ -390,16 +390,20 @@ class MILK10kPipeline:
                     with torch.no_grad():
                         outputs = self.conceptclip_model(**inputs)
                         
-                        # Extract logits based on ConceptCLIP output structure
+                        # Extract logits - ConceptCLIP should return standard CLIP-like outputs
                         if hasattr(outputs, 'logits_per_image'):
                             logits = outputs.logits_per_image.softmax(dim=-1)[0]
-                        elif hasattr(outputs, 'similarity_scores'):
-                            logits = outputs.similarity_scores.softmax(dim=-1)[0]
                         else:
-                            # Fallback: compute similarity manually
-                            image_features = outputs['image_features']
-                            text_features = outputs['text_features']
-                            logit_scale = outputs.get('logit_scale', torch.tensor(1.0))
+                            # Standard CLIP-like computation
+                            image_features = outputs.image_embeds if hasattr(outputs, 'image_embeds') else outputs['image_features']
+                            text_features = outputs.text_embeds if hasattr(outputs, 'text_embeds') else outputs['text_features']
+                            
+                            # Normalize features
+                            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+                            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+                            
+                            # Compute similarity
+                            logit_scale = getattr(outputs, 'logit_scale', torch.tensor(1.0)).exp()
                             logits = (logit_scale * image_features @ text_features.t()).softmax(dim=-1)[0]
                     
                     # Convert to probabilities
