@@ -268,22 +268,39 @@ class MILK10kPipeline:
         center_points = self._find_roi_points(image)
         point_labels = np.ones(len(center_points))
         
-        # SAM2 segmentation
-        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-            self.sam_predictor.set_image(image)
-            masks, scores, _ = self.sam_predictor.predict(
-                point_coords=center_points,
-                point_labels=point_labels,
-                box=None,
-                multimask_output=True
-            )
-        
-        # Select best mask
-        best_idx = int(np.argmax(scores))
-        mask = masks[best_idx].astype(np.uint8)
-        confidence = float(scores[best_idx])
-        
-        return mask, confidence
+        # SAM2 segmentation with proper error handling
+        try:
+            with torch.inference_mode():
+                # Use mixed precision for better performance on V100
+                if torch.cuda.is_available():
+                    with torch.autocast("cuda", dtype=torch.bfloat16):
+                        self.sam_predictor.set_image(image)
+                        masks, scores, _ = self.sam_predictor.predict(
+                            point_coords=center_points,
+                            point_labels=point_labels,
+                            box=None,
+                            multimask_output=True
+                        )
+                else:
+                    self.sam_predictor.set_image(image)
+                    masks, scores, _ = self.sam_predictor.predict(
+                        point_coords=center_points,
+                        point_labels=point_labels,
+                        box=None,
+                        multimask_output=True
+                    )
+            
+            # Select best mask
+            best_idx = int(np.argmax(scores))
+            mask = masks[best_idx].astype(np.uint8)
+            confidence = float(scores[best_idx])
+            
+            return mask, confidence
+            
+        except Exception as e:
+            print(f"SAM2 segmentation error: {e}")
+            # Return empty mask as fallback
+            return np.zeros((h, w), dtype=np.uint8), 0.0
     
     def _find_roi_points(self, image: np.ndarray) -> np.ndarray:
         """Find regions of interest for adaptive segmentation"""
