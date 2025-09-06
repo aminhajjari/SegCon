@@ -2,6 +2,7 @@
 # MILK10k Pipeline - Narval Requirements (Local Models Setup)
 # SAM2: Installed in editable mode in virtual environment
 # ConceptCLIP: Local module (not installed package)
+# GPU: V100 or better recommended
 # ================================================================
 
 # Core ML/AI Libraries (available on Compute Canada with --no-index)
@@ -38,6 +39,17 @@ einops>=0.6.0
 psutil>=5.9.0
 pyyaml>=6.0
 
+# Performance and memory management
+memory-profiler>=0.61.0
+
+# ================================================================
+# System Requirements for Narval:
+# ================================================================
+# - GPU: V100 (32GB) or better recommended for large datasets
+# - Memory: 64GB+ recommended for processing large medical images
+# - Storage: Ensure adequate space in project directory
+# - SLURM_TMPDIR: Used for temporary files during processing
+#
 # ================================================================
 # Installation Instructions for Narval (Updated for Local Models):
 # ================================================================
@@ -67,7 +79,7 @@ pyyaml>=6.0
 #
 # 5. Install remaining packages from PyPI:
 #    pip install transformers tokenizers huggingface-hub safetensors
-#    pip install SimpleITK einops psutil pyyaml
+#    pip install SimpleITK einops psutil pyyaml memory-profiler
 #
 # 6. Verify installations:
 #    python -c "from sam2.sam2_image_predictor import SAM2ImagePredictor; print('SAM2: OK')"
