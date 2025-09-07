@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=8               # Increased for better performance
 #SBATCH --mem=64G                       # Increased for ConceptCLIP and image processing
-#SBATCH --gres=gpu:v100:1               # Specify GPU type for better allocation
+#SBATCH --gres=gpu:a100:1                                        # Specify GPU type for better allocation
 #SBATCH --time=06:00:00                 # Increased time for full dataset processing
 #SBATCH --mail-user=aminhjjr@gmail.com
 #SBATCH --mail-type=ALL
