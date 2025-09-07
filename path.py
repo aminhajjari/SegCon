@@ -23,6 +23,14 @@ from skimage import filters, morphology, measure
 import warnings
 warnings.filterwarnings('ignore')
 
+
+import warnings
+warnings.filterwarnings('ignore')
+
+# Set up Python path for ConceptModel imports
+import sys
+sys.path.insert(0, '/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input')
+
 # Import local ConceptCLIP modules directly
 # NEW (correct):
 from ConceptModel.modeling_conceptclip import ConceptCLIP
