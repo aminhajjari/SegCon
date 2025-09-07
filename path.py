@@ -24,6 +24,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # Import local ConceptCLIP modules directly
+# NEW (correct):
 from ConceptModel.modeling_conceptclip import ConceptCLIP
 from ConceptModel.preprocessor_conceptclip import ConceptCLIPProcessor  # Check this class name too
 
@@ -46,6 +47,7 @@ def load_local_conceptclip_models(model_path: str, device: str):
         print(f"Loading ConceptCLIP from local path: {model_path}")
         
         # Load model and processor using correct class names
+        # NEW (correct):
         model = ConceptCLIP.from_pretrained(model_path)
         processor = ConceptCLIPProcessor.from_pretrained(model_path)
         
