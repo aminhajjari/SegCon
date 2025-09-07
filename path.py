@@ -1,6 +1,5 @@
 # MILK10k Medical Image Segmentation and Classification Pipeline
-# Processes MILK10k dataset: segmentation → ConceptCLIP classification
-# Using locally installed SAM2 and ConceptCLIP models
+# Final version with ConceptCLIP direct imports and error fixes
 
 import os
 import cv2
@@ -24,29 +23,31 @@ from skimage import filters, morphology, measure
 import warnings
 warnings.filterwarnings('ignore')
 
-# Import local ConceptCLIP models
-from ConceptModel import modeling_conceptclip
-from ConceptModel import preprocessor_conceptclip
+# Import local ConceptCLIP modules directly
+from ConceptModel.modeling_conceptclip import ConceptCLIP
+from ConceptModel.preprocessor_conceptclip import ConceptCLIPProcessor  # Check this class name too
 
 # ==================== CONFIGURATION ====================
 
-# These should be correct in your path.py:
+# Your dataset paths (Narval specific)
 DATASET_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_Input"
 GROUNDTRUTH_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/groundtruth.csv"
 OUTPUT_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/outputs"
+
+# Local model paths
 SAM2_MODEL_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/segment-anything-2"
 CONCEPTCLIP_MODEL_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/ConceptModel"
 
 # ==================== LOCAL MODEL LOADING ====================
 
 def load_local_conceptclip_models(model_path: str, device: str):
-    """Load local ConceptCLIP models"""
+    """Load local ConceptCLIP models using direct imports"""
     try:
-        print("Loading local ConceptCLIP models...")
+        print(f"Loading ConceptCLIP from local path: {model_path}")
         
-        # Load model using local implementation
-        model = modeling_conceptclip.ConceptCLIPModel.from_pretrained(model_path)
-        processor = preprocessor_conceptclip.ConceptCLIPProcessor.from_pretrained(model_path)
+        # Load model and processor using correct class names
+        model = ConceptCLIP.from_pretrained(model_path)
+        processor = ConceptCLIPProcessor.from_pretrained(model_path)
         
         # Move to device
         model = model.to(device)
@@ -57,27 +58,23 @@ def load_local_conceptclip_models(model_path: str, device: str):
         
     except Exception as e:
         print(f"Error loading local ConceptCLIP: {e}")
-        print("Please check your ConceptCLIP model path and installation")
+        print("Please check your ConceptCLIP model path and imports")
         raise e
 
 def load_local_sam2_model(model_path: str):
-    """Load local SAM2 model"""
+    """Load local SAM2 model (already installed in editable mode)"""
     try:
-        print("Loading local SAM2 model...")
+        print("Loading SAM2 model (installed in editable mode)...")
         
-        # Load SAM2 from local installation
-        if os.path.exists(model_path):
-            predictor = SAM2ImagePredictor.from_pretrained(model_path)
-        else:
-            # Fallback to default SAM2 model name if path doesn't exist
-            predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2-hiera-large")
+        # Since SAM2 is installed in editable mode, we can use it directly
+        predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2-hiera-large")
         
-        print("SAM2 loaded successfully")
+        print("SAM2 loaded successfully from installed package")
         return predictor
         
     except Exception as e:
-        print(f"Error loading local SAM2: {e}")
-        print("Please check your SAM2 model path and installation")
+        print(f"Error loading SAM2: {e}")
+        print("Please check your SAM2 installation in the virtual environment")
         raise e
 
 # ==================== MILK10k DOMAIN CONFIGURATION ====================
@@ -389,7 +386,7 @@ class MILK10kPipeline:
                 if seg_image is not None and seg_image.size > 0:
                     seg_pil = Image.fromarray(seg_image.astype(np.uint8))
                     
-                    # Use local ConceptCLIP processor with AutoProcessor
+                    # Use ConceptCLIP processor
                     inputs = self.conceptclip_processor(
                         images=seg_pil, 
                         text=self.domain.text_prompts,
@@ -405,21 +402,13 @@ class MILK10kPipeline:
                     with torch.no_grad():
                         outputs = self.conceptclip_model(**inputs)
                         
-                        # Extract logits - ConceptCLIP should return standard CLIP-like outputs
-                        if hasattr(outputs, 'logits_per_image'):
-                            logits = outputs.logits_per_image.softmax(dim=-1)[0]
-                        else:
-                            # Standard CLIP-like computation
-                            image_features = outputs.image_embeds if hasattr(outputs, 'image_embeds') else outputs['image_features']
-                            text_features = outputs.text_embeds if hasattr(outputs, 'text_embeds') else outputs['text_features']
-                            
-                            # Normalize features
-                            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-                            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-                            
-                            # Compute similarity
-                            logit_scale = getattr(outputs, 'logit_scale', torch.tensor(1.0)).exp()
-                            logits = (logit_scale * image_features @ text_features.t()).softmax(dim=-1)[0]
+                        # Extract logits using ConceptCLIP output structure
+                        logit_scale = outputs.get("logit_scale", torch.tensor(1.0))
+                        image_features = outputs["image_features"]
+                        text_features = outputs["text_features"]
+                        
+                        # Compute similarity scores
+                        logits = (logit_scale * image_features @ text_features.t()).softmax(dim=-1)[0]
                     
                     # Convert to probabilities
                     disease_names = [prompt.split(' showing ')[-1] for prompt in self.domain.text_prompts]
