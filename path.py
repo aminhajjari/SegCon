@@ -1,5 +1,5 @@
 # MILK10k Medical Image Segmentation and Classification Pipeline
-# Final version with ConceptCLIP direct imports and error fixes
+# Fixed version with proper GPU detection and error handling
 
 import os
 import cv2
@@ -23,18 +23,60 @@ from skimage import filters, morphology, measure
 import warnings
 warnings.filterwarnings('ignore')
 
-
-import warnings
-warnings.filterwarnings('ignore')
-
 # Set up Python path for ConceptModel imports
 import sys
 sys.path.insert(0, '/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input')
 
 # Import local ConceptCLIP modules directly
-# NEW (correct):
 from ConceptModel.modeling_conceptclip import ConceptCLIP
-from ConceptModel.preprocessor_conceptclip import ConceptCLIPProcessor  # Check this class name too
+from ConceptModel.preprocessor_conceptclip import ConceptCLIPProcessor
+
+# ==================== GPU DETECTION AND SETUP ====================
+
+def setup_gpu_environment():
+    """Setup GPU environment with proper error handling"""
+    print("=" * 50)
+    print("GPU ENVIRONMENT SETUP")
+    print("=" * 50)
+    
+    # Check CUDA availability
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    
+    if torch.cuda.is_available():
+        print(f"CUDA version: {torch.version.cuda}")
+        print(f"Number of GPUs: {torch.cuda.device_count()}")
+        
+        for i in range(torch.cuda.device_count()):
+            gpu_props = torch.cuda.get_device_properties(i)
+            print(f"GPU {i}: {gpu_props.name} ({gpu_props.total_memory / 1e9:.1f} GB)")
+        
+        # Set default device
+        device = f"cuda:{torch.cuda.current_device()}"
+        print(f"Using device: {device}")
+        
+        # Test GPU allocation
+        try:
+            test_tensor = torch.randn(10, 10).to(device)
+            print("✅ GPU allocation test successful")
+            del test_tensor
+            torch.cuda.empty_cache()
+        except Exception as e:
+            print(f"❌ GPU allocation test failed: {e}")
+            print("Falling back to CPU")
+            device = "cpu"
+    else:
+        print("⚠️ CUDA not available. Using CPU.")
+        device = "cpu"
+        
+        # Check Slurm GPU allocation
+        slurm_gpus = os.environ.get('SLURM_GPUS_ON_NODE', 'Not set')
+        cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set')
+        print(f"SLURM_GPUS_ON_NODE: {slurm_gpus}")
+        print(f"CUDA_VISIBLE_DEVICES: {cuda_visible}")
+    
+    print("=" * 50)
+    return device
 
 # ==================== CONFIGURATION ====================
 
@@ -54,8 +96,7 @@ def load_local_conceptclip_models(model_path: str, device: str):
     try:
         print(f"Loading ConceptCLIP from local path: {model_path}")
         
-        # Load model and processor using correct class names
-        # NEW (correct):
+        # Load model and processor
         model = ConceptCLIP.from_pretrained(model_path)
         processor = ConceptCLIPProcessor.from_pretrained(model_path)
         
@@ -71,21 +112,55 @@ def load_local_conceptclip_models(model_path: str, device: str):
         print("Please check your ConceptCLIP model path and imports")
         raise e
 
-def load_local_sam2_model(model_path: str):
-    """Load local SAM2 model (already installed in editable mode)"""
+def load_local_sam2_model(model_path: str, device: str):
+    """Load local SAM2 model with proper device handling"""
     try:
-        print("Loading SAM2 model (installed in editable mode)...")
+        print("Loading SAM2 model...")
         
-        # Since SAM2 is installed in editable mode, we can use it directly
-        predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2-hiera-large")
+        # Force CPU for model loading if GPU not available
+        if device == "cpu":
+            print("Loading SAM2 on CPU (GPU not available)")
+            # Use smaller model for CPU or custom loading
+            predictor = SAM2ImagePredictor.from_pretrained(
+                "facebook/sam2-hiera-tiny",  # Use tiny model for CPU
+                device=device
+            )
+        else:
+            print(f"Loading SAM2 on GPU: {device}")
+            # Clear GPU memory first
+            torch.cuda.empty_cache()
+            
+            try:
+                predictor = SAM2ImagePredictor.from_pretrained(
+                    "facebook/sam2-hiera-large",
+                    device=device
+                )
+            except RuntimeError as gpu_error:
+                print(f"GPU loading failed: {gpu_error}")
+                print("Falling back to CPU...")
+                predictor = SAM2ImagePredictor.from_pretrained(
+                    "facebook/sam2-hiera-tiny",
+                    device="cpu"
+                )
         
-        print("SAM2 loaded successfully from installed package")
+        print("SAM2 loaded successfully")
         return predictor
         
     except Exception as e:
         print(f"Error loading SAM2: {e}")
-        print("Please check your SAM2 installation in the virtual environment")
-        raise e
+        print("Attempting fallback to CPU with minimal model...")
+        
+        try:
+            # Final fallback
+            predictor = SAM2ImagePredictor.from_pretrained(
+                "facebook/sam2-hiera-tiny",
+                device="cpu"
+            )
+            print("SAM2 loaded successfully with CPU fallback")
+            return predictor
+        except Exception as fallback_error:
+            print(f"Fallback also failed: {fallback_error}")
+            raise e
 
 # ==================== MILK10k DOMAIN CONFIGURATION ====================
 
@@ -148,13 +223,13 @@ class MILK10kPipeline:
         # Create output directories
         self.output_path.mkdir(parents=True, exist_ok=True)
         (self.output_path / "segmented").mkdir(exist_ok=True)
-        (self.output_path / "segmented_for_conceptclip").mkdir(exist_ok=True)  # Key directory
+        (self.output_path / "segmented_for_conceptclip").mkdir(exist_ok=True)
         (self.output_path / "classifications").mkdir(exist_ok=True)
         (self.output_path / "visualizations").mkdir(exist_ok=True)
         (self.output_path / "reports").mkdir(exist_ok=True)
         
-        # Initialize device
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Initialize device with proper setup
+        self.device = setup_gpu_environment()
         print(f"Initializing MILK10k pipeline on {self.device}")
         
         # Load models
@@ -164,10 +239,10 @@ class MILK10kPipeline:
         self._load_ground_truth()
         
     def _load_models(self):
-        """Load local SAM2 and ConceptCLIP models"""
+        """Load local SAM2 and ConceptCLIP models with device handling"""
         
-        # Load local SAM2
-        self.sam_predictor = load_local_sam2_model(self.sam2_model_path)
+        # Load local SAM2 with device parameter
+        self.sam_predictor = load_local_sam2_model(self.sam2_model_path, self.device)
         
         # Load local ConceptCLIP
         self.conceptclip_model, self.conceptclip_processor = load_local_conceptclip_models(
@@ -266,7 +341,7 @@ class MILK10kPipeline:
             return clahe.apply(image)
     
     def segment_image(self, image: np.ndarray) -> Tuple[np.ndarray, float]:
-        """Segment image using SAM2 with adaptive strategy"""
+        """Segment image using SAM2 with device-aware processing"""
         h, w = image.shape[:2]
         
         # Adaptive segmentation strategy
@@ -276,8 +351,9 @@ class MILK10kPipeline:
         # SAM2 segmentation with proper error handling
         try:
             with torch.inference_mode():
-                # Use mixed precision for better performance on V100
-                if torch.cuda.is_available():
+                # Device-aware processing
+                if self.device.startswith("cuda") and torch.cuda.is_available():
+                    # GPU processing with mixed precision
                     with torch.autocast("cuda", dtype=torch.bfloat16):
                         self.sam_predictor.set_image(image)
                         masks, scores, _ = self.sam_predictor.predict(
@@ -287,6 +363,7 @@ class MILK10kPipeline:
                             multimask_output=True
                         )
                 else:
+                    # CPU processing
                     self.sam_predictor.set_image(image)
                     masks, scores, _ = self.sam_predictor.predict(
                         point_coords=center_points,
@@ -562,14 +639,15 @@ class MILK10kPipeline:
                     'ground_truth': ground_truth,
                     'correct': ground_truth == predicted_disease if ground_truth else None,
                     'segmented_outputs_dir': str(conceptclip_dir),
-                    'classification_probabilities': classification_probs
+                    'classification_probabilities': classification_probs,
+                    'device_used': self.device
                 }
                 
                 results.append(result)
                 
                 # Progress indicator
                 status = "✓" if result['correct'] else ("✗" if ground_truth else "-")
-                print(f"{status} {img_name}: {predicted_disease} ({prediction_confidence:.2%})")
+                print(f"{status} {img_name}: {predicted_disease} ({prediction_confidence:.2%}) [Device: {self.device}]")
                 
             except Exception as e:
                 print(f"Error processing {img_path}: {e}")
@@ -603,7 +681,16 @@ class MILK10kPipeline:
         seg_confidences = [r['segmentation_confidence'] for r in results]
         pred_confidences = [r['prediction_confidence'] for r in results]
         
+        # Device statistics
+        device_used = results[0]['device_used'] if results else "unknown"
+        
         report = {
+            'system_info': {
+                'device_used': device_used,
+                'pytorch_version': torch.__version__,
+                'cuda_available': torch.cuda.is_available(),
+                'gpu_count': torch.cuda.device_count() if torch.cuda.is_available() else 0
+            },
             'dataset_info': {
                 'total_images_found': total_processed,
                 'file_formats': dict(format_counter),
@@ -723,6 +810,10 @@ class MILK10kPipeline:
 def main():
     """Main execution function"""
     
+    print("="*60)
+    print("MILK10K MEDICAL IMAGE PROCESSING PIPELINE")
+    print("="*60)
+    
     # Initialize pipeline with local models
     pipeline = MILK10kPipeline(
         dataset_path=DATASET_PATH,
@@ -739,6 +830,7 @@ def main():
     print("\n" + "="*50)
     print("MILK10K PROCESSING COMPLETE")
     print("="*50)
+    print(f"Device used: {report['system_info']['device_used']}")
     print(f"Total images processed: {report['dataset_info']['total_images_found']}")
     print(f"Successful segmentations: {report['processing_stats']['successful_segmentations']}")
     print(f"Successful classifications: {report['processing_stats']['successful_classifications']}")
