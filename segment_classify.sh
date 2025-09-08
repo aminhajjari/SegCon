@@ -12,13 +12,17 @@
 #SBATCH --error=%x-%j.err
 
 echo "=========================================="
-echo "Job Started on Node: $SLURMD_NODENAME" 
+echo "Job Started on Node: $SLURMD_NODENAME"
 echo "Start Time: $(date)"
 echo "=========================================="
 
-cd /project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegCon
+# Navigate to project directory
+cd /project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegCon || {
+    echo "Failed to change directory to SegCon. Exiting."
+    exit 1
+}
 
-# Load modules BEFORE activating venv (critical for OpenCV)
+# Purge existing modules and load required ones (critical for OpenCV)
 module --force purge
 module load StdEnv/2023
 module load python/3.11.5
@@ -31,11 +35,17 @@ module list
 
 # Activate virtual environment AFTER loading modules
 echo "Activating virtual environment..."
-source /project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/venv/bin/activate
+source /project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/venv/bin/activate || {
+    echo "Failed to activate virtual environment. Exiting."
+    exit 1
+}
 
 # Install missing packages (not opencv-python)
 echo "Installing packages..."
-pip install pandas matplotlib --quiet
+pip install pandas matplotlib --quiet || {
+    echo "Failed to install packages. Exiting."
+    exit 1
+}
 
 # Set environment variables
 export PYTHONPATH="/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input:$PYTHONPATH"
@@ -58,16 +68,17 @@ print(f'PyTorch: {torch.__version__}, CUDA: {torch.cuda.is_available()}')
 from ConceptModel.modeling_conceptclip import ConceptCLIP
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 print('All imports successful')
-"
-
-if [ $? -ne 0 ]; then
+" || {
     echo "Import test failed. Exiting."
     exit 1
-fi
+}
 
-# Run script
+# Run script with explicit path and error handling
 echo "Starting pipeline..."
-python path.py
+python path.py || {
+    echo "Pipeline execution failed. Check error log."
+    exit 1
+}
 
 # Check completion status
 if [ $? -eq 0 ]; then
@@ -81,4 +92,4 @@ else
     echo "End Time: $(date)"
     echo "=========================================="
     exit 1
-fi
+}
