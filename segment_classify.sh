@@ -27,7 +27,7 @@ module purge
 
 # Load required modules (preserve your venv Python)
 module load StdEnv/2020           # Standard environment
-module load cuda/11.8            # CUDA version for GPU support
+module load cuda/11.8.0          # Use the exact version name           # CUDA version for GPU support
 module load gcc/9.3.0            # Compiler for local builds
 module load cmake/3.21.4         # If needed for building dependencies
 
