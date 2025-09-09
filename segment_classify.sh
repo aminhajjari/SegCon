@@ -23,7 +23,7 @@ echo "=========================================="
 PROJECT_DIR="/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input"
 SCRIPT_DIR="$PROJECT_DIR/SegCon"
 VENV_DIR="$PROJECT_DIR/venv"
-PYTHON_SCRIPT="milk10k_pipeline.py"  # UPDATE THIS TO YOUR ACTUAL SCRIPT NAME
+PYTHON_SCRIPT="path.py"  # UPDATE THIS TO YOUR ACTUAL SCRIPT NAME
 CACHE_DIR="$PROJECT_DIR/huggingface_cache"
 
 # Navigate to script directory
