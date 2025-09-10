@@ -88,8 +88,8 @@ echo "=========================================="
 echo "Starting MILK10k pipeline..."
 echo "Start time: $(date)"
 
-# Run your Python script (update with your actual script name)
-python milk10k_pipeline.py
+# Run your Python script
+python path.py
 
 # Capture exit code
 exit_code=$?
