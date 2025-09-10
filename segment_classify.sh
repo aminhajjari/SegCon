@@ -21,7 +21,8 @@ export BLIS_NUM_THREADS=1
 module load python/3.9 cuda/11.7
 
 # Activate your virtual environment
-source your_venv_path/bin/activate
+source /project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/venv/bin/activate
+
 
 # Run the pipeline
-python your_script.py
+python path.py
