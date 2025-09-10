@@ -4,10 +4,10 @@
 #SBATCH --job-name=MILK10k-pipeline
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=06:00:00
+#SBATCH --time=24:00:00
 #SBATCH --mail-user=aminhjjr@gmail.com
 #SBATCH --mail-type=ALL
 #SBATCH --output=/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegCon/logs/%x-%j.out
@@ -44,7 +44,7 @@ cd "$SCRIPT_DIR" || {
 # ==================== ENVIRONMENT VARIABLES ====================
 echo "⚙️ Setting environment variables..."
 
-# Prevent BLIS/OpenMP conflicts
+# Prevent BLIS/OpenMP conflicts (matching path.py)
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -57,7 +57,7 @@ export CUDA_LAUNCH_BLOCKING=0
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 
-# Pipeline-specific paths
+# Pipeline-specific paths (matching path.py)
 export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
 export DATASET_PATH="$PROJECT_DIR/MILK10k_Training_Input"
 export GROUNDTRUTH_PATH="$PROJECT_DIR/MILK10k_Training_GroundTruth.csv"
@@ -73,11 +73,11 @@ echo "📦 Loading modules for Narval..."
 
 module --force purge
 module load StdEnv/2023
-module load python/3.10
+module load python/3.11
 module load cuda/11.8
 module load cudnn/8.9.7
 module load opencv/4.12.0
-module load simpleitk
+# SimpleITK is in venv, not a Narval module
 
 echo "✅ Modules loaded successfully."
 echo "📋 Loaded modules:"
@@ -111,14 +111,17 @@ source "$VENV_DIR/bin/activate" || {
 }
 echo "✅ Virtual environment activated."
 
-# Install dependencies if not already installed
+# Verify Python version
+echo "Python version:"
+python --version
+
+# Install dependencies (redundant since confirmed installed)
 pip install --no-index torch torchvision torchaudio
 pip install --no-index transformers pillow pandas numpy opencv-python-headless pydicom nibabel matplotlib seaborn tqdm simpleitk
-pip install --no-index -e "$SAM2_MODEL_PATH"  # Install sam2 from local path
+pip install --no-index -e "$SAM2_MODEL_PATH"  # Ensure sam2 is installed
 
 echo "Python environment:"
 which python
-python --version
 echo "PyTorch version:"
 python -c "import torch; print(torch.__version__); print('CUDA available:', torch.cuda.is_available())"
 
@@ -142,13 +145,20 @@ if [ ! -d "$SAM2_MODEL_PATH" ]; then
     exit 1
 fi
 
+if [ ! -f "$SAM2_MODEL_PATH/checkpoints/sam2_hiera_large.pt" ]; then
+    echo "❌ ERROR: SAM2 checkpoint not found: $SAM2_MODEL_PATH/checkpoints/sam2_hiera_large.pt"
+    echo "Download it from https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt and upload to $SAM2_MODEL_PATH/checkpoints/"
+    exit 1
+fi
+
 if [ ! -d "$CONCEPTCLIP_MODEL_PATH" ]; then
     echo "❌ ERROR: ConceptCLIP model path not found: $CONCEPTCLIP_MODEL_PATH"
     exit 1
 fi
 
 if [ ! -d "$HUGGINGFACE_CACHE_PATH" ]; then
-    echo "⚠️ WARNING: Hugging Face cache path not found: $HUGGINGFACE_CACHE_PATH"
+    echo "⚠️ WARNING: Hugging Face cache path not found, creating: $HUGGINGFACE_CACHE_PATH"
+    mkdir -p "$HUGGINGFACE_CACHE_PATH"
 fi
 
 if [ ! -f "$GROUNDTRUTH_PATH" ]; then
