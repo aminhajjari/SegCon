@@ -1,20 +1,24 @@
+```bash
 #!/bin/bash
 #SBATCH --account=def-arashmoh
-#SBATCH --job-name=milk10k-pipeline
+#SBATCH --job-name=MILK10k-pipeline
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --time=4:00:00
-#SBATCH --gres=gpu:1
-#SBATCH --output=MILK10k-pipeline-narval-%j.out
-#SBATCH --error=MILK10k-pipeline-narval-%j.err
+#SBATCH --gres=gpu:a100:1
+#SBATCH --time=06:00:00
+#SBATCH --mail-user=aminhjjr@gmail.com
+#SBATCH --mail-type=ALL
+#SBATCH --output=/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegCon/logs/%x-%j.out
+#SBATCH --error=/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegCon/logs/%x-%j.err
 
-# Print job information
+echo "=========================================="
+echo "MILK10k Segmentation and Classification Pipeline Started (Narval)"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Job Name: $SLURM_JOB_NAME"
 echo "Node: $SLURMD_NODENAME"
-echo "Start time: $(date)"
+echo "Start Time: $(date)"
 echo "Account: $SLURM_JOB_ACCOUNT"
 echo "Partition: $SLURM_JOB_PARTITION"
 echo "Number of nodes: $SLURM_JOB_NUM_NODES"
@@ -25,7 +29,22 @@ echo "GPU allocation: $CUDA_VISIBLE_DEVICES"
 echo "Working directory: $(pwd)"
 echo "=========================================="
 
-# CRITICAL: Set threading environment variables to prevent BLIS/OpenMP conflicts
+# ==================== PROJECT SETUP ====================
+PROJECT_DIR="/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input"
+SCRIPT_DIR="$PROJECT_DIR/SegCon"
+VENV_DIR="$PROJECT_DIR/venv"
+PYTHON_SCRIPT="path.py"
+
+# Navigate to script directory
+cd "$SCRIPT_DIR" || {
+    echo "❌ ERROR: Failed to change directory to $SCRIPT_DIR. Exiting."
+    exit 1
+}
+
+# ==================== ENVIRONMENT VARIABLES ====================
+echo "⚙️ Setting environment variables..."
+
+# Prevent BLIS/OpenMP conflicts
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -33,80 +52,208 @@ export VECLIB_MAXIMUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export BLIS_NUM_THREADS=1
 
-# Set additional environment variables for stability
+# Additional stability settings
 export CUDA_LAUNCH_BLOCKING=0
 export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 
-# Load required modules
-echo "Loading modules..."
-module load python/3.9
-module load cuda/11.7
-module load gcc/9.3.0
+# Pipeline-specific paths
+export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
+export DATASET_PATH="$PROJECT_DIR/MILK10k_Training_Input"
+export GROUNDTRUTH_PATH="$PROJECT_DIR/MILK10k_Training_GroundTruth.csv"
+export OUTPUT_PATH="$PROJECT_DIR/outputs"
+export SAM2_MODEL_PATH="$PROJECT_DIR/segment-anything-2"
+export CONCEPTCLIP_MODEL_PATH="$PROJECT_DIR/ConceptModel"
+export HUGGINGFACE_CACHE_PATH="$PROJECT_DIR/huggingface_cache"
 
-# Show loaded modules
-echo "Loaded modules:"
+echo "✅ Environment variables set."
+
+# ==================== NARVAL-SPECIFIC MODULE SETUP ====================
+echo "📦 Loading modules for Narval..."
+
+module --force purge
+module load StdEnv/2023
+module load python/3.10
+module load cuda/11.8
+module load cudnn/8.9.7
+module load opencv/4.12.0
+module load simpleitk
+
+echo "✅ Modules loaded successfully."
+echo "📋 Loaded modules:"
 module list
 
-# Show CUDA info
-echo "CUDA environment:"
-echo "CUDA_VISIBLE_DEVICES: $CUDA_VISIBLE_DEVICES"
+# ==================== NARVAL GPU DIAGNOSTICS ====================
+echo ""
+echo "🔍 Narval GPU Diagnostics (BEFORE srun):"
+echo "========================================"
+echo "SLURM_JOB_ID: $SLURM_JOB_ID"
 echo "SLURM_GPUS_ON_NODE: $SLURM_GPUS_ON_NODE"
+echo "SLURM_GPUS: $SLURM_GPUS"
+echo "CUDA_VISIBLE_DEVICES (before srun): $CUDA_VISIBLE_DEVICES"
+echo "SLURM_JOB_GPUS: $SLURM_JOB_GPUS"
+echo "SLURM_STEP_GPUS: $SLURM_STEP_GPUS"
 
-# Activate virtual environment (adjust path as needed)
-echo "Activating virtual environment..."
-# Uncomment and adjust the path to your virtual environment:
-# source /path/to/your/venv/bin/activate
+if command -v nvidia-smi &> /dev/null; then
+    echo ""
+    echo "🖥️ Available GPUs on node:"
+    nvidia-smi --list-gpus
+else
+    echo "⚠️ nvidia-smi not available"
+fi
 
-# Alternative: if using conda/mamba environment:
-# module load miniconda3
-# source activate your_env_name
+# ==================== VIRTUAL ENVIRONMENT ====================
+echo ""
+echo "💻 Activating virtual environment..."
+source "$VENV_DIR/bin/activate" || {
+    echo "❌ ERROR: Failed to activate virtual environment at $VENV_DIR. Exiting."
+    exit 1
+}
+echo "✅ Virtual environment activated."
 
-# Show Python environment info
+# Install dependencies if not already installed
+pip install --no-index torch torchvision torchaudio
+pip install --no-index transformers pillow pandas numpy opencv-python-headless pydicom nibabel matplotlib seaborn tqdm simpleitk
+pip install --no-index -e "$SAM2_MODEL_PATH"  # Install sam2 from local path
+
 echo "Python environment:"
 which python
 python --version
 echo "PyTorch version:"
 python -c "import torch; print(torch.__version__); print('CUDA available:', torch.cuda.is_available())"
 
-# Set working directory (adjust as needed)
-cd /project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input
+# ==================== PRE-EXECUTION CHECKS ====================
+echo ""
+echo "🔍 Pre-execution checks:"
+echo "======================="
 
-# Show current directory and files
+if [ ! -d "$DATASET_PATH" ]; then
+    echo "❌ ERROR: Dataset path does not exist: $DATASET_PATH"
+    exit 1
+fi
+
+if [ ! -f "$PYTHON_SCRIPT" ]; then
+    echo "❌ ERROR: Python script not found: $PYTHON_SCRIPT"
+    exit 1
+fi
+
+if [ ! -d "$SAM2_MODEL_PATH" ]; then
+    echo "❌ ERROR: SAM2 model path not found: $SAM2_MODEL_PATH"
+    exit 1
+fi
+
+if [ ! -d "$CONCEPTCLIP_MODEL_PATH" ]; then
+    echo "❌ ERROR: ConceptCLIP model path not found: $CONCEPTCLIP_MODEL_PATH"
+    exit 1
+fi
+
+if [ ! -d "$HUGGINGFACE_CACHE_PATH" ]; then
+    echo "⚠️ WARNING: Hugging Face cache path not found: $HUGGINGFACE_CACHE_PATH"
+fi
+
+if [ ! -f "$GROUNDTRUTH_PATH" ]; then
+    echo "⚠️ WARNING: Ground truth file not found: $GROUNDTRUTH_PATH"
+fi
+
+echo "✅ All required paths verified."
 echo "Current directory: $(pwd)"
 echo "Files in current directory:"
 ls -la
 
-# Verify key files exist
-echo "Checking for required files and directories:"
-echo "Dataset directory: $(ls -ld MILK10k_Training_Input 2>/dev/null || echo 'NOT FOUND')"
-echo "Ground truth file: $(ls -l MILK10k_Training_GroundTruth.csv 2>/dev/null || echo 'NOT FOUND')"
-echo "SAM2 directory: $(ls -ld segment-anything-2 2>/dev/null || echo 'NOT FOUND')"
-echo "ConceptModel directory: $(ls -ld ConceptModel 2>/dev/null || echo 'NOT FOUND')"
+# Create output directory
+mkdir -p "$OUTPUT_PATH"
 
-# Run the pipeline
-echo "=========================================="
-echo "Starting MILK10k pipeline..."
-echo "Start time: $(date)"
+# ==================== CRITICAL: USE SRUN FOR GPU ALLOCATION ====================
+echo ""
+echo "🚀 Starting MILK10k pipeline with srun..."
+echo "=================================================================="
 
-# Run your Python script
-python path.py
+# Create a wrapper script to check GPU availability inside srun
+cat > gpu_check_and_run.py << 'EOF'
+import os
+import torch
+import sys
 
-# Capture exit code
-exit_code=$?
+print("=" * 60)
+print("GPU CHECK INSIDE SRUN")
+print("=" * 60)
+print(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', 'NOT SET')}")
+print(f"SLURM_STEP_GPUS: {os.environ.get('SLURM_STEP_GPUS', 'NOT SET')}")
+print(f"SLURM_JOB_GPUS: {os.environ.get('SLURM_JOB_GPUS', 'NOT SET')}")
+print(f"PyTorch CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"PyTorch GPU count: {torch.cuda.device_count()}")
+    for i in range(torch.cuda.device_count()):
+        props = torch.cuda.get_device_properties(i)
+        print(f"GPU {i}: {props.name}")
+print("=" * 60)
 
-echo "Pipeline completed with exit code: $exit_code"
-echo "End time: $(date)"
+# Run the actual script
+sys.path.insert(0, '/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegCon')
+exec(open('path.py').read())
+EOF
+
+# Launch the Python script with srun
+srun --gres=gpu:1 python gpu_check_and_run.py 2>&1 | tee "${OUTPUT_PATH}/pipeline_log.txt"
+EXIT_CODE=${PIPESTATUS[0]}
+
+# ==================== POST-EXECUTION ANALYSIS ====================
+echo ""
+echo "📊 Post-execution analysis:"
+echo "=========================="
+
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "✅ Pipeline completed successfully!"
+    
+    if [ -f "${OUTPUT_PATH}/reports/detailed_results.csv" ]; then
+        PROCESSED_COUNT=$(wc -l < "${OUTPUT_PATH}/reports/detailed_results.csv")
+        echo "📁 Detailed results created: $((PROCESSED_COUNT-1)) images processed"
+    else
+        echo "⚠️ No detailed results found at ${OUTPUT_PATH}/reports/detailed_results.csv"
+    fi
+    
+    if [ -f "${OUTPUT_PATH}/reports/processing_report.json" ]; then
+        echo "📄 Processing report generated"
+    else
+        echo "⚠️ No processing report found at ${OUTPUT_PATH}/reports/processing_report.json"
+    fi
+    
+    if [ -d "${OUTPUT_PATH}/segmented_for_conceptclip" ]; then
+        SEGMENTED_COUNT=$(find "${OUTPUT_PATH}/segmented_for_conceptclip" -name "*.png" 2>/dev/null | wc -l)
+        echo "📁 Segmented outputs created: $SEGMENTED_COUNT files"
+    else
+        echo "⚠️ No segmented outputs found at ${OUTPUT_PATH}/segmented_for_conceptclip"
+    fi
+    
+    if [ -f "${OUTPUT_PATH}/visualizations/summary_plots.png" ]; then
+        echo "📊 Summary plots generated"
+    else
+        echo "⚠️ No summary plots found at ${OUTPUT_PATH}/visualizations/summary_plots.png"
+    fi
+    
+else
+    echo "❌ Pipeline failed with exit code: $EXIT_CODE"
+    echo "Check the error log and pipeline_log.txt for details"
+fi
+
+echo ""
+echo "💡 KEY LESSON: On Narval, always use 'srun' to launch GPU programs!"
+echo "   - 'python script.py' → No GPU access"
+echo "   - 'srun python script.py' → GPU access ✅"
+
+# Show output directory contents
+echo "Output directory contents:"
+ls -la "$OUTPUT_PATH/" || echo "outputs directory not found"
 
 # Show final job statistics
 echo "=========================================="
 echo "Job statistics:"
 sstat --format=JobID,MaxRSS,AveCPU,AvePages,AveRSS,AveVMSize --jobs=$SLURM_JOB_ID || echo "sstat not available"
 
-# Show output directory contents
-echo "Output directory contents:"
-ls -la outputs/ || echo "outputs directory not found"
+echo "=========================================="
+echo "Job End Time: $(date)"
+echo "Final Exit Code: $EXIT_CODE"
+echo "=========================================="
 
-echo "Job completed at: $(date)"
-
-# Exit with the same code as the Python script
-exit $exit_code
+exit $EXIT_CODE
+```
