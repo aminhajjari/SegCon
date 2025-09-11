@@ -1,5 +1,5 @@
 # MILK10k Medical Image Segmentation and Classification Pipeline
-# Updated version with proper local cache support
+# Test version with 20 image limit for validation
 
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -8,7 +8,7 @@ os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["BLIS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
-# Now safe to import numerical libraries
+
 import cv2
 import torch
 import numpy as np
@@ -17,7 +17,6 @@ from tqdm import tqdm
 import pydicom
 import nibabel as nib
 import SimpleITK as sitk
-from sam2.sam2_image_predictor import SAM2ImagePredictor
 from collections import Counter, defaultdict
 from PIL import Image
 import json
@@ -28,10 +27,11 @@ from typing import Dict, List, Tuple, Optional, Union
 from dataclasses import dataclass
 from skimage import filters, morphology, measure
 import warnings
+import argparse
+import sys
 warnings.filterwarnings('ignore')
 
 # Set up Python path for ConceptModel imports
-import sys
 sys.path.insert(0, '/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input')
 
 # Import local ConceptCLIP modules directly
@@ -39,8 +39,6 @@ from ConceptModel.modeling_conceptclip import ConceptCLIP
 from ConceptModel.preprocessor_conceptclip import ConceptCLIPProcessor
 
 # ==================== CONFIGURATION ====================
-
-
 
 # Your dataset paths (Narval specific)
 DATASET_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_Input"
@@ -50,7 +48,7 @@ OUTPUT_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/outputs
 # Local model paths
 SAM2_MODEL_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/segment-anything-2"
 CONCEPTCLIP_MODEL_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/ConceptModel"
-HUGGINGFACE_CACHE_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/huggingface_cache"he"
+HUGGINGFACE_CACHE_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/huggingface_cache"
 
 # ==================== GPU DETECTION AND SETUP ====================
 
@@ -143,8 +141,8 @@ def load_local_sam2_model(model_path: str, device: str):
         from sam2.sam2_image_predictor import SAM2ImagePredictor
         
         # Load model configuration
-        model_cfg = "sam2_hiera_l.yaml"  # or your specific config
-        sam2_checkpoint = os.path.join(model_path, "checkpoints", "sam2_hiera_large.pt")  # adjust path as needed
+        model_cfg = "sam2_hiera_l.yaml"
+        sam2_checkpoint = os.path.join(model_path, "checkpoints", "sam2_hiera_large.pt")
         
         # Build model
         sam2_model = build_sam2(model_cfg, sam2_checkpoint, device=device)
@@ -272,7 +270,7 @@ def create_simple_processor():
                 result['pixel_values'] = processed
             
             if text is not None:
-                # Simple text encoding - you might need to adjust this
+                # Simple text encoding
                 if isinstance(text, str):
                     text = [text]
                 
@@ -336,7 +334,7 @@ class MILK10kPipeline:
     
     def __init__(self, dataset_path: str, groundtruth_path: str, output_path: str, 
                  sam2_model_path: str = None, conceptclip_model_path: str = None,
-                 cache_path: str = None):
+                 cache_path: str = None, max_images: int = None):
         self.dataset_path = Path(dataset_path)
         self.groundtruth_path = groundtruth_path
         self.output_path = Path(output_path)
@@ -344,6 +342,7 @@ class MILK10kPipeline:
         self.conceptclip_model_path = conceptclip_model_path or CONCEPTCLIP_MODEL_PATH
         self.cache_path = cache_path or HUGGINGFACE_CACHE_PATH
         self.domain = MILK10K_DOMAIN
+        self.max_images = max_images  # Store max_images limit
         
         # Create output directories
         self.output_path.mkdir(parents=True, exist_ok=True)
@@ -692,7 +691,7 @@ class MILK10kPipeline:
         return None
     
     def process_dataset(self) -> Dict:
-        """Process entire MILK10k dataset"""
+        """Process entire MILK10k dataset or limited subset for testing"""
         print("Starting MILK10k dataset processing...")
         
         # Find all images
@@ -702,12 +701,21 @@ class MILK10kPipeline:
         
         print(f"Found {len(image_files)} images in dataset")
         
+        # Limit images if max_images is set (for testing)
+        if self.max_images:
+            image_files = image_files[:self.max_images]
+            print(f"⚠️ TEST MODE: Processing only {len(image_files)} images")
+            print("=" * 50)
+        
         results = []
         format_counter = Counter()
         correct_predictions = 0
         total_with_gt = 0
         
-        for img_path in tqdm(image_files, desc="Processing MILK10k images"):
+        # Update progress bar description for test mode
+        desc = f"Processing {'TEST' if self.max_images else 'MILK10k'} images"
+        
+        for img_path in tqdm(image_files, desc=desc):
             try:
                 # Track file formats
                 ext = img_path.suffix.lower()
@@ -766,7 +774,8 @@ class MILK10kPipeline:
                     'segmented_outputs_dir': str(conceptclip_dir),
                     'classification_probabilities': classification_probs,
                     'device_used': self.device,
-                    'cache_used': self.cache_path
+                    'cache_used': self.cache_path,
+                    'test_mode': self.max_images is not None
                 }
                 
                 results.append(result)
@@ -784,6 +793,14 @@ class MILK10kPipeline:
         
         # Generate report
         report = self._generate_comprehensive_report(results, format_counter, accuracy, total_with_gt)
+        
+        # Add test mode info to report
+        if self.max_images:
+            report['test_mode'] = {
+                'enabled': True,
+                'images_limit': self.max_images,
+                'images_processed': len(results)
+            }
         
         # Save results
         self._save_results(results, report)
@@ -937,11 +954,26 @@ class MILK10kPipeline:
 # ==================== MAIN EXECUTION ====================
 
 def main():
-    """Main execution function"""
+    """Main execution function with argument parsing"""
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='MILK10k Medical Image Processing Pipeline')
+    parser.add_argument('--test', action='store_true', help='Run in test mode (20 images only)')
+    parser.add_argument('--max-images', type=int, default=None, help='Maximum number of images to process')
+    args = parser.parse_args()
+    
+    # Determine max_images
+    max_images = None
+    if args.test:
+        max_images = 20
+    elif args.max_images:
+        max_images = args.max_images
     
     print("="*60)
     print("MILK10K MEDICAL IMAGE PROCESSING PIPELINE")
     print("Updated with Local Cache Support")
+    if max_images:
+        print(f"🔬 TEST MODE: Processing {max_images} images only")
     print("="*60)
     
     # Initialize pipeline with local models and cache
@@ -951,7 +983,8 @@ def main():
         output_path=OUTPUT_PATH,
         sam2_model_path=SAM2_MODEL_PATH,
         conceptclip_model_path=CONCEPTCLIP_MODEL_PATH,
-        cache_path=HUGGINGFACE_CACHE_PATH
+        cache_path=HUGGINGFACE_CACHE_PATH,
+        max_images=max_images
     )
     
     # Process dataset
@@ -959,7 +992,10 @@ def main():
     
     # Print summary
     print("\n" + "="*50)
-    print("MILK10K PROCESSING COMPLETE")
+    if max_images:
+        print(f"MILK10K TEST RUN COMPLETE ({max_images} images)")
+    else:
+        print("MILK10K PROCESSING COMPLETE")
     print("="*50)
     print(f"Device used: {report['system_info']['device_used']}")
     print(f"Cache directory: {report['system_info']['cache_directory']}")
@@ -970,6 +1006,10 @@ def main():
     
     if report['accuracy_metrics']['total_evaluated'] > 0:
         print(f"Overall accuracy: {report['accuracy_metrics']['overall_accuracy']:.2%}")
+    
+    if 'test_mode' in report:
+        print(f"\n⚠️ TEST MODE RESULTS - Limited to {report['test_mode']['images_limit']} images")
+        print("Run without --test flag to process entire dataset")
     
     print(f"\nSegmented outputs for ConceptCLIP saved to:")
     print(f"{OUTPUT_PATH}/segmented_for_conceptclip/")
