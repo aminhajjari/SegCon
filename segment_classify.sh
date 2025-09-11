@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --account=def-arashmoh
-#SBATCH --job-name=MILK10k-test-20  # Changed job name to indicate test
+#SBATCH --job-name=MILK10k-test-20      # CHANGED: Added "test-20" to job name
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G  # Reduced memory for test run
+#SBATCH --mem=32G                        # CHANGED: Reduced from 64G to 32G for test
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=02:00:00  # Reduced time for test run (2 hours instead of 24)
+#SBATCH --time=02:00:00                  # CHANGED: Reduced from 24:00:00 to 02:00:00
 #SBATCH --mail-user=aminhjjr@gmail.com
 #SBATCH --mail-type=ALL
 #SBATCH --output=/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegCon/logs/%x-%j.out
@@ -31,7 +31,7 @@ export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
 export PYTHONPATH="$PROJECT_DIR:$PYTHONPATH"
 export DATASET_PATH="$PROJECT_DIR/MILK10k_Training_Input"
 export GROUNDTRUTH_PATH="$PROJECT_DIR/MILK10k_Training_GroundTruth.csv"
-export OUTPUT_PATH="$PROJECT_DIR/outputs_test_20"  # Different output folder for test
+export OUTPUT_PATH="$PROJECT_DIR/outputs_test_20"  # CHANGED: Added "_test_20" to separate test outputs
 export SAM2_MODEL_PATH="$PROJECT_DIR/segment-anything-2"
 export CONCEPTCLIP_MODEL_PATH="$PROJECT_DIR/ConceptModel"
 export HUGGINGFACE_CACHE_PATH="$PROJECT_DIR/huggingface_cache"
@@ -43,7 +43,7 @@ module load StdEnv/2023 python/3.11 cuda/11.8 cudnn/8.9.7 opencv/4.12.0
 # Activate virtual environment
 source "$VENV_DIR/bin/activate" || exit 1
 
-# Install dependencies (skip if already installed)
+# Install dependencies
 pip install --no-index torch torchvision torchaudio transformers pillow pandas numpy opencv-python-headless pydicom nibabel matplotlib seaborn tqdm simpleitk
 pip install --no-index -e "$SAM2_MODEL_PATH"
 
@@ -57,26 +57,28 @@ pip install --no-index -e "$SAM2_MODEL_PATH"
 [ ! -f "$GROUNDTRUTH_PATH" ] && echo "WARNING: Ground truth file missing: $GROUNDTRUTH_PATH"
 mkdir -p "$OUTPUT_PATH"
 
+# ADDED: Test mode indicator
 echo "============================================"
 echo "RUNNING IN TEST MODE - PROCESSING 20 IMAGES"
 echo "============================================"
+echo "Start Time: $(date)"
 
-# Run pipeline with --test flag for 20 images
+# CHANGED: Added --test flag to the python command
 srun --gres=gpu:1 python path.py --test 2>&1 | tee "${OUTPUT_PATH}/pipeline_log.txt"
 EXIT_CODE=${PIPESTATUS[0]}
 
 # Post-execution
 if [ $EXIT_CODE -eq 0 ]; then
-    echo "TEST PIPELINE completed successfully!"
     echo "============================================"
-    echo "TEST RUN SUMMARY:"
+    echo "TEST PIPELINE completed successfully!"
     echo "============================================"
     [ -f "${OUTPUT_PATH}/reports/detailed_results.csv" ] && echo "Processed images: $(( $(wc -l < "${OUTPUT_PATH}/reports/detailed_results.csv") - 1 ))"
     [ -f "${OUTPUT_PATH}/reports/processing_report.json" ] && echo "Processing report generated"
     [ -d "${OUTPUT_PATH}/segmented_for_conceptclip" ] && echo "Segmented outputs: $(find "${OUTPUT_PATH}/segmented_for_conceptclip" -name "*.png" | wc -l) files"
     [ -f "${OUTPUT_PATH}/visualizations/summary_plots.png" ] && echo "Summary plots generated"
     echo "============================================"
-    echo "To run full dataset, remove --test flag and increase time/memory limits"
+    echo "This was a TEST RUN with 20 images only"
+    echo "To process full dataset, remove --test flag and increase time/memory"
 else
     echo "Pipeline failed with exit code: $EXIT_CODE"
 fi
