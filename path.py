@@ -46,7 +46,7 @@ print("-"*60)
 # Your dataset paths (Narval specific)
 DATASET_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_Input"
 GROUNDTRUTH_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_GroundTruth.csv"
-OUTPUT_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/outputs"
+OUTPUT_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegConOutputs"
 
 # Local model paths
 SAM2_MODEL_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/segment-anything-2"
