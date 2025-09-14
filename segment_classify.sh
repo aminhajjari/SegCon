@@ -16,7 +16,7 @@ export NUMEXPR_NUM_THREADS=1
 
 # === Project Paths ===
 export PROJECT_DIR="/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input"
-export OUTPUT_PATH="$PROJECT_DIR/SegCon/outputs"
+export OUTPUT_PATH="$PROJECT_DIR/SegConOutputs"
 
 # Create output folder if missing
 mkdir -p "$OUTPUT_PATH"
