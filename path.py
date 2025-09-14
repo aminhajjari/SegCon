@@ -719,7 +719,7 @@ class MILK10kPipeline:
         
         return final_probs
     
-   def get_ground_truth_label(self, img_path: Path) -> Optional[str]:
+    def get_ground_truth_label(self, img_path: Path) -> Optional[str]:
         """Get ground truth label for image"""
         if self.ground_truth is None:
             return None
@@ -941,58 +941,58 @@ class MILK10kPipeline:
         
         return report
     
-   def process_dataset(self) -> Dict:
-    """Process entire MILK10k dataset or limited subset for testing"""
-    print("Starting MILK10k dataset processing...")
-    
-    # Find all images
-    image_files = []
-    for ext in self.domain.image_extensions:
-        image_files.extend(self.dataset_path.rglob(f"*{ext}"))
-    
-    print(f"Found {len(image_files)} total images in dataset")
-    
-    # Sort for consistent order
-    image_files = sorted(image_files)
-    
-    # Debug: Show first few image names and corresponding CSV entries
-    if self.ground_truth is not None:
-        print("\n📊 Verifying image-CSV matching:")
-        print("First 5 image files found:")
-        for i, img in enumerate(image_files[:5]):
-            print(f"  {i+1}. {img.name}")
+    def process_dataset(self) -> Dict:
+        """Process entire MILK10k dataset or limited subset for testing"""
+        print("Starting MILK10k dataset processing...")
         
-        print("\nFirst 5 CSV lesion_ids:")
-        for i, lesion_id in enumerate(self.ground_truth['lesion_id'].head(5)):
-            print(f"  {i+1}. {lesion_id}")
-        print("-"*50)
-    
-    # Limit images if specified
-    if self.max_images:
-        original_count = len(image_files)
-        image_files = image_files[:self.max_images]
-        print(f"📊 Processing {len(image_files)} images out of {original_count} total")
-        print(f"   This corresponds to the first {self.max_images} entries in the CSV ground truth")
-        print("   Ensures 1:1 correspondence between processed images and CSV data")
-        print("   Use --full flag to process the entire dataset")
-        print("=" * 50)
-    else:
-        print(f"🔬 FULL DATASET MODE: Processing all {len(image_files)} images")
-        print("   Will attempt to match all images with available CSV ground truth")
-        print("=" * 50)
-    
-    results = []
-    format_counter = Counter()
-    correct_predictions = 0
-    total_with_gt = 0
-    csv_matches_found = 0  # Track how many images actually match CSV entries
-    
-    print("✓ SECTION: Dataset file discovery completed successfully")
-    print(f"Final image count to process: {len(image_files)}")
-    if self.max_images:
-        print(f"CSV ground truth entries available: {len(self.ground_truth) if self.ground_truth is not None else 0}")
-    print("-"*60)
-    
+        # Find all images
+        image_files = []
+        for ext in self.domain.image_extensions:
+            image_files.extend(self.dataset_path.rglob(f"*{ext}"))
+        
+        print(f"Found {len(image_files)} total images in dataset")
+        
+        # Sort for consistent order
+        image_files = sorted(image_files)
+        
+        # Debug: Show first few image names and corresponding CSV entries
+        if self.ground_truth is not None:
+            print("\n📊 Verifying image-CSV matching:")
+            print("First 5 image files found:")
+            for i, img in enumerate(image_files[:5]):
+                print(f"  {i+1}. {img.name}")
+            
+            print("\nFirst 5 CSV lesion_ids:")
+            for i, lesion_id in enumerate(self.ground_truth['lesion_id'].head(5)):
+                print(f"  {i+1}. {lesion_id}")
+            print("-"*50)
+        
+        # Limit images if specified
+        if self.max_images:
+            original_count = len(image_files)
+            image_files = image_files[:self.max_images]
+            print(f"📊 Processing {len(image_files)} images out of {original_count} total")
+            print(f"   This corresponds to the first {self.max_images} entries in the CSV ground truth")
+            print("   Ensures 1:1 correspondence between processed images and CSV data")
+            print("   Use --full flag to process the entire dataset")
+            print("=" * 50)
+        else:
+            print(f"🔬 FULL DATASET MODE: Processing all {len(image_files)} images")
+            print("   Will attempt to match all images with available CSV ground truth")
+            print("=" * 50)
+        
+        results = []
+        format_counter = Counter()
+        correct_predictions = 0
+        total_with_gt = 0
+        csv_matches_found = 0  # Track how many images actually match CSV entries
+        
+        print("✓ SECTION: Dataset file discovery completed successfully")
+        print(f"Final image count to process: {len(image_files)}")
+        if self.max_images:
+            print(f"CSV ground truth entries available: {len(self.ground_truth) if self.ground_truth is not None else 0}")
+        print("-"*60)
+        
     # Update progress bar description
     desc = f"Processing {'Limited' if self.max_images else 'Full'} MILK10k dataset"
     
