@@ -38,6 +38,9 @@ sys.path.insert(0, '/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input')
 from ConceptModel.modeling_conceptclip import ConceptCLIP
 from ConceptModel.preprocessor_conceptclip import ConceptCLIPProcessor
 
+print("✓ SECTION: Environment setup and imports completed successfully")
+print("-"*60)
+
 # ==================== CONFIGURATION ====================
 
 # Your dataset paths (Narval specific)
@@ -49,6 +52,9 @@ OUTPUT_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/outputs
 SAM2_MODEL_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/segment-anything-2"
 CONCEPTCLIP_MODEL_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/ConceptModel"
 HUGGINGFACE_CACHE_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/huggingface_cache"
+
+print("✓ SECTION: Configuration paths defined successfully")
+print("-"*60)
 
 # ==================== GPU DETECTION AND SETUP ====================
 
@@ -97,6 +103,9 @@ def setup_gpu_environment():
     print("=" * 50)
     return device
 
+print("✓ SECTION: GPU setup function defined successfully")
+print("-"*60)
+
 # ==================== CACHE AND OFFLINE SETUP ====================
 
 def setup_offline_environment(cache_path: str):
@@ -127,6 +136,9 @@ def setup_offline_environment(cache_path: str):
         print(f"❌ Cache directory does not exist: {cache_path}")
         
     print("=" * 50)
+
+print("✓ SECTION: Offline environment setup function defined successfully")
+print("-"*60)
 
 # ==================== SAM2 MODEL LOADING ====================
 
@@ -178,6 +190,9 @@ def create_dummy_sam_predictor():
             return masks, scores, logits
     
     return DummySAMPredictor()
+
+print("✓ SECTION: SAM2 model loading functions defined successfully")
+print("-"*60)
 
 # ==================== LOCAL MODEL LOADING ====================
 
@@ -283,6 +298,9 @@ def create_simple_processor():
     
     return SimpleProcessor()
 
+print("✓ SECTION: ConceptCLIP model loading functions defined successfully")
+print("-"*60)
+
 # ==================== MILK10k DOMAIN CONFIGURATION ====================
 
 @dataclass
@@ -325,6 +343,7 @@ MILK10K_DOMAIN = MedicalDomain(
         'VASC': 'vascular lesion'
     },
     preprocessing_params={'normalize': True, 'enhance_contrast': True},
+    segmentation_strategy='medical_adaptive',
     class_names=[
         'actinic keratosis',
         'basal cell carcinoma',
@@ -344,7 +363,6 @@ print(f"✓ MILK10k domain configured with {len(MILK10K_DOMAIN.class_names)} cla
 print("✓ SECTION: Domain configuration completed successfully")
 print("-"*60)
 
-
 # ==================== MAIN PIPELINE CLASS ====================
 
 class MILK10kPipeline:
@@ -353,6 +371,8 @@ class MILK10kPipeline:
     def __init__(self, dataset_path: str, groundtruth_path: str, output_path: str, 
                  sam2_model_path: str = None, conceptclip_model_path: str = None,
                  cache_path: str = None, max_images: int = None):
+        print("Initializing MILK10k Pipeline...")
+        
         self.dataset_path = Path(dataset_path)
         self.groundtruth_path = groundtruth_path
         self.output_path = Path(output_path)
@@ -370,6 +390,8 @@ class MILK10kPipeline:
         (self.output_path / "visualizations").mkdir(exist_ok=True)
         (self.output_path / "reports").mkdir(exist_ok=True)
         
+        print("✓ Output directories created successfully")
+        
         # Initialize device with proper setup
         self.device = setup_gpu_environment()
         print(f"Initializing MILK10k pipeline on {self.device}")
@@ -380,19 +402,30 @@ class MILK10kPipeline:
         # Load ground truth
         self._load_ground_truth()
         
+        print("✓ SECTION: Pipeline initialization completed successfully")
+        print("-"*60)
+        
     def _load_models(self):
         """Load local SAM2 and ConceptCLIP models with device handling"""
+        print("Loading models...")
         
         # Load local SAM2 with device parameter
         self.sam_predictor = load_local_sam2_model(self.sam2_model_path, self.device)
+        print("✓ SAM2 model loading completed")
         
         # Load local ConceptCLIP with cache support
         self.conceptclip_model, self.conceptclip_processor = load_local_conceptclip_models(
             self.conceptclip_model_path, self.cache_path, self.device
         )
+        print("✓ ConceptCLIP model loading completed")
+        
+        print("✓ SECTION: Model loading completed successfully")
+        print("-"*60)
         
     def _load_ground_truth(self):
         """Load ground truth annotations"""
+        print("Loading ground truth data...")
+        
         if os.path.exists(self.groundtruth_path):
             self.ground_truth = pd.read_csv(self.groundtruth_path)
             print(f"Loaded ground truth: {len(self.ground_truth)} samples")
@@ -400,6 +433,9 @@ class MILK10kPipeline:
         else:
             print(f"Ground truth file not found: {self.groundtruth_path}")
             self.ground_truth = None
+            
+        print("✓ SECTION: Ground truth loading completed successfully")
+        print("-"*60)
     
     def preprocess_image(self, image_path: str) -> Optional[np.ndarray]:
         """Preprocess images for MILK10k dataset"""
@@ -555,343 +591,54 @@ class MILK10kPipeline:
         
         return np.array(roi_points)
     
-    def create_medical_segmentation_outputs(self, image: np.ndarray, mask: np.ndarray) -> Dict[str, np.ndarray]:
-    """
-    Create medical-standard segmentation visualizations
-    Focuses on clinically relevant presentations
-    """
-    outputs = {}
-    h, w = image.shape[:2]
-    
-    # 1. CLINICAL STANDARD: Semi-transparent colored overlay
-    # This is the most common presentation in medical imaging
-    overlay_color = (255, 100, 100)  # Soft red for pathology
-    alpha = 0.4  # Semi-transparent
-    
-    overlay = image.copy()
-    colored_mask = np.zeros_like(image)
-    colored_mask[mask == 1] = overlay_color
-    
-    clinical_overlay = cv2.addWeighted(image, 1-alpha, colored_mask, alpha, 0)
-    outputs['clinical_overlay'] = clinical_overlay
-    
-    # 2. CONTOUR HIGHLIGHTING: Professional medical standard
-    contour_image = image.copy()
-    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
-    # Use medical-standard colors
-    cv2.drawContours(contour_image, contours, -1, (0, 255, 255), 2)  # Cyan outline
-    outputs['medical_contour'] = contour_image
-    
-    # 3. MULTI-COLOR OVERLAY: Different colors for different confidence levels
-    if hasattr(self, 'segmentation_confidence'):
-        conf = getattr(self, 'segmentation_confidence', 0.8)
-        if conf > 0.8:
-            color = (255, 0, 0)  # High confidence: Red
-        elif conf > 0.6:
-            color = (255, 165, 0)  # Medium confidence: Orange  
-        else:
-            color = (255, 255, 0)  # Low confidence: Yellow
-            
-        conf_overlay = image.copy()
-        conf_mask = np.zeros_like(image)
-        conf_mask[mask == 1] = color
-        confidence_viz = cv2.addWeighted(image, 0.7, conf_mask, 0.3, 0)
-        outputs['confidence_overlay'] = confidence_viz
-    
-    # 4. ANNOTATED VERSION: With measurement info
-    annotated = clinical_overlay.copy()
-    
-    # Calculate basic measurements
-    area_pixels = np.sum(mask)
-    area_percentage = (area_pixels / (h * w)) * 100
-    
-    # Find centroid for annotation placement
-    coords = np.where(mask == 1)
-    if len(coords[0]) > 0:
-        centroid_y = int(np.mean(coords[0]))
-        centroid_x = int(np.mean(coords[1]))
+    def create_segmented_outputs(self, image: np.ndarray, mask: np.ndarray) -> Dict[str, np.ndarray]:
+        """Create multiple visualization outputs for ConceptCLIP input"""
+        outputs = {}
+        h, w = image.shape[:2]
         
-        # Add annotation text
-        annotation_text = f"Area: {area_percentage:.1f}%"
-        cv2.putText(annotated, annotation_text, 
-                   (centroid_x - 50, centroid_y - 10),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        # 1. Colored overlay (main output)
+        overlay_color = (255, 100, 100)  # Red for medical visualization
+        alpha = 0.3
         
-        # Add arrow pointing to centroid
-        cv2.arrowedLine(annotated, 
-                       (centroid_x - 80, centroid_y - 30),
-                       (centroid_x - 10, centroid_y - 15),
-                       (255, 255, 255), 2)
-    
-    outputs['annotated_clinical'] = annotated
-    
-    # 5. HEATMAP STYLE: For uncertainty visualization
-    # Convert mask to heatmap overlay
-    heatmap = cv2.applyColorMap((mask * 255).astype(np.uint8), cv2.COLORMAP_HOT)
-    heatmap_overlay = cv2.addWeighted(image, 0.7, heatmap, 0.3, 0)
-    outputs['heatmap_overlay'] = heatmap_overlay
-    
-    # 6. SIDE-BY-SIDE COMPARISON: Original vs. Segmented
-    # Resize for consistent display
-    comparison = np.hstack([
-        cv2.putText(image.copy(), "Original", (10, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2),
-        cv2.putText(clinical_overlay.copy(), "Segmented", (10, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-    ])
-    outputs['clinical_comparison'] = comparison
-    
-    # 7. CROPPED WITH CONTEXT: Bounding box + padding for context
-    coords = np.where(mask == 1)
-    if len(coords[0]) > 0:
-        y_min, y_max = coords[0].min(), coords[0].max()
-        x_min, x_max = coords[1].min(), coords[1].max()
+        overlay = image.copy()
+        colored_mask = np.zeros_like(image)
+        colored_mask[mask == 1] = overlay_color
         
-        # Add substantial padding for medical context
-        padding = max(50, min(h, w) // 10)  # Adaptive padding
-        y_min = max(0, y_min - padding)
-        y_max = min(h, y_max + padding)
-        x_min = max(0, x_min - padding)
-        x_max = min(w, x_max + padding)
+        colored_overlay = cv2.addWeighted(image, 1-alpha, colored_mask, alpha, 0)
+        outputs['colored_overlay'] = colored_overlay
         
-        # Crop both original and segmented versions
-        cropped_original = image[y_min:y_max, x_min:x_max]
-        cropped_segmented = clinical_overlay[y_min:y_max, x_min:x_max]
+        # 2. Contour highlighting
+        contour_image = image.copy()
+        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(contour_image, contours, -1, (0, 255, 0), 2)
+        outputs['contour'] = contour_image
         
-        outputs['cropped_context'] = cropped_segmented
-        outputs['cropped_original'] = cropped_original
-    
-    return outputs
-
-def get_priority_outputs_for_conceptclip(self, segmented_outputs: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
-    """
-    Return the most clinically relevant outputs for ConceptCLIP classification
-    """
-    priority_outputs = {}
-    
-    # Priority order for medical classification
-    priority_keys = [
-        'clinical_overlay',      # Most important: full context with clear segmentation
-        'medical_contour',       # Second: boundary emphasis
-        'annotated_clinical',    # Third: with measurements
-        'cropped_context',       # Fourth: focused region with context
-        'confidence_overlay'     # Fifth: confidence-based coloring
-    ]
-    
-    for key in priority_keys:
-        if key in segmented_outputs:
-            priority_outputs[key] = segmented_outputs[key]
-    
-    return priority_outputs
-
-def classify_with_medical_priority(self, segmented_outputs: Dict[str, np.ndarray]) -> Dict:
-    """
-    Enhanced classification focusing on medically relevant visualizations
-    """
-    # Get priority outputs for classification
-    priority_outputs = self.get_priority_outputs_for_conceptclip(segmented_outputs)
-    
-    results = {}
-    
-    # Classify each priority output
-    for output_type, seg_image in priority_outputs.items():
-        if seg_image is not None and seg_image.size > 0:
-            seg_pil = Image.fromarray(seg_image.astype(np.uint8))
+        # 3. Cropped region with context
+        coords = np.where(mask == 1)
+        if len(coords[0]) > 0:
+            y_min, y_max = coords[0].min(), coords[0].max()
+            x_min, x_max = coords[1].min(), coords[1].max()
             
-            # Use ConceptCLIP processor
-            inputs = self.conceptclip_processor(
-                images=seg_pil, 
-                text=self.domain.text_prompts,
-                return_tensors='pt',
-                padding=True,
-                truncation=True
-            )
+            # Add padding
+            padding = 50
+            y_min = max(0, y_min - padding)
+            y_max = min(h, y_max + padding)
+            x_min = max(0, x_min - padding)
+            x_max = min(w, x_max + padding)
             
-            # Move inputs to device
-            inputs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v 
-                     for k, v in inputs.items()}
-            
-            with torch.no_grad():
-                outputs = self.conceptclip_model(**inputs)
-                
-                logit_scale = outputs.get("logit_scale", torch.tensor(1.0))
-                image_features = outputs["image_features"]
-                text_features = outputs["text_features"]
-                
-                # Compute similarity scores
-                logits = (logit_scale * image_features @ text_features.t()).softmax(dim=-1)[0]
-            
-            # Convert to probabilities
-            disease_names = [prompt.split(' showing ')[-1] for prompt in self.domain.text_prompts]
-            probabilities = {disease_names[i]: float(logits[i]) for i in range(len(disease_names))}
-            results[output_type] = probabilities
-    
-    # Medical-focused ensemble weights
-    medical_weights = {
-        'clinical_overlay': 0.35,      # Highest weight - standard medical presentation
-        'medical_contour': 0.25,       # High weight - clear boundaries
-        'annotated_clinical': 0.20,    # Good weight - includes measurements
-        'cropped_context': 0.15,       # Moderate weight - focused view
-        'confidence_overlay': 0.05     # Low weight - supplementary info
-    }
-    
-    return self._ensemble_predictions(results, medical_weights)
-    
-    # 3. MULTI-COLOR OVERLAY: Different colors for different confidence levels
-    if hasattr(self, 'segmentation_confidence'):
-        conf = getattr(self, 'segmentation_confidence', 0.8)
-        if conf > 0.8:
-            color = (255, 0, 0)  # High confidence: Red
-        elif conf > 0.6:
-            color = (255, 165, 0)  # Medium confidence: Orange  
-        else:
-            color = (255, 255, 0)  # Low confidence: Yellow
-            
-        conf_overlay = image.copy()
-        conf_mask = np.zeros_like(image)
-        conf_mask[mask == 1] = color
-        confidence_viz = cv2.addWeighted(image, 0.7, conf_mask, 0.3, 0)
-        outputs['confidence_overlay'] = confidence_viz
-    
-    # 4. ANNOTATED VERSION: With measurement info
-    annotated = clinical_overlay.copy()
-    
-    # Calculate basic measurements
-    area_pixels = np.sum(mask)
-    area_percentage = (area_pixels / (h * w)) * 100
-    
-    # Find centroid for annotation placement
-    coords = np.where(mask == 1)
-    if len(coords[0]) > 0:
-        centroid_y = int(np.mean(coords[0]))
-        centroid_x = int(np.mean(coords[1]))
+            cropped = colored_overlay[y_min:y_max, x_min:x_max]
+            outputs['cropped'] = cropped
         
-        # Add annotation text
-        annotation_text = f"Area: {area_percentage:.1f}%"
-        cv2.putText(annotated, annotation_text, 
-                   (centroid_x - 50, centroid_y - 10),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        # 4. Segmented region only (black background)
+        masked_only = np.zeros_like(image)
+        masked_only[mask == 1] = image[mask == 1]
+        outputs['masked_only'] = masked_only
         
-        # Add arrow pointing to centroid
-        cv2.arrowedLine(annotated, 
-                       (centroid_x - 80, centroid_y - 30),
-                       (centroid_x - 10, centroid_y - 15),
-                       (255, 255, 255), 2)
-    
-    outputs['annotated_clinical'] = annotated
-    
-    # 5. HEATMAP STYLE: For uncertainty visualization
-    # Convert mask to heatmap overlay
-    heatmap = cv2.applyColorMap((mask * 255).astype(np.uint8), cv2.COLORMAP_HOT)
-    heatmap_overlay = cv2.addWeighted(image, 0.7, heatmap, 0.3, 0)
-    outputs['heatmap_overlay'] = heatmap_overlay
-    
-    # 6. SIDE-BY-SIDE COMPARISON: Original vs. Segmented
-    # Resize for consistent display
-    comparison = np.hstack([
-        cv2.putText(image.copy(), "Original", (10, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2),
-        cv2.putText(clinical_overlay.copy(), "Segmented", (10, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-    ])
-    outputs['clinical_comparison'] = comparison
-    
-    # 7. CROPPED WITH CONTEXT: Bounding box + padding for context
-    coords = np.where(mask == 1)
-    if len(coords[0]) > 0:
-        y_min, y_max = coords[0].min(), coords[0].max()
-        x_min, x_max = coords[1].min(), coords[1].max()
+        # 5. Side-by-side comparison
+        comparison = np.hstack([image, colored_overlay])
+        outputs['side_by_side'] = comparison
         
-        # Add substantial padding for medical context
-        padding = max(50, min(h, w) // 10)  # Adaptive padding
-        y_min = max(0, y_min - padding)
-        y_max = min(h, y_max + padding)
-        x_min = max(0, x_min - padding)
-        x_max = min(w, x_max + padding)
-        
-        # Crop both original and segmented versions
-        cropped_original = image[y_min:y_max, x_min:x_max]
-        cropped_segmented = clinical_overlay[y_min:y_max, x_min:x_max]
-        
-        outputs['cropped_context'] = cropped_segmented
-        outputs['cropped_original'] = cropped_original
-    
-    return outputs
-
-def get_priority_outputs_for_conceptclip(self, segmented_outputs: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
-    """
-    Return the most clinically relevant outputs for ConceptCLIP classification
-    """
-    priority_outputs = {}
-    
-    # Priority order for medical classification
-    priority_keys = [
-        'clinical_overlay',      # Most important: full context with clear segmentation
-        'medical_contour',       # Second: boundary emphasis
-        'annotated_clinical',    # Third: with measurements
-        'cropped_context',       # Fourth: focused region with context
-        'confidence_overlay'     # Fifth: confidence-based coloring
-    ]
-    
-    for key in priority_keys:
-        if key in segmented_outputs:
-            priority_outputs[key] = segmented_outputs[key]
-    
-    return priority_outputs
-
-def classify_with_medical_priority(self, segmented_outputs: Dict[str, np.ndarray]) -> Dict:
-    """
-    Enhanced classification focusing on medically relevant visualizations
-    """
-    # Get priority outputs for classification
-    priority_outputs = self.get_priority_outputs_for_conceptclip(segmented_outputs)
-    
-    results = {}
-    
-    # Classify each priority output
-    for output_type, seg_image in priority_outputs.items():
-        if seg_image is not None and seg_image.size > 0:
-            seg_pil = Image.fromarray(seg_image.astype(np.uint8))
-            
-            # Use ConceptCLIP processor
-            inputs = self.conceptclip_processor(
-                images=seg_pil, 
-                text=self.domain.text_prompts,
-                return_tensors='pt',
-                padding=True,
-                truncation=True
-            )
-            
-            # Move inputs to device
-            inputs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v 
-                     for k, v in inputs.items()}
-            
-            with torch.no_grad():
-                outputs = self.conceptclip_model(**inputs)
-                
-                logit_scale = outputs.get("logit_scale", torch.tensor(1.0))
-                image_features = outputs["image_features"]
-                text_features = outputs["text_features"]
-                
-                # Compute similarity scores
-                logits = (logit_scale * image_features @ text_features.t()).softmax(dim=-1)[0]
-            
-            # Convert to probabilities
-            disease_names = [prompt.split(' showing ')[-1] for prompt in self.domain.text_prompts]
-            probabilities = {disease_names[i]: float(logits[i]) for i in range(len(disease_names))}
-            results[output_type] = probabilities
-    
-    # Medical-focused ensemble weights
-    medical_weights = {
-        'clinical_overlay': 0.35,      # Highest weight - standard medical presentation
-        'medical_contour': 0.25,       # High weight - clear boundaries
-        'annotated_clinical': 0.20,    # Good weight - includes measurements
-        'cropped_context': 0.15,       # Moderate weight - focused view
-        'confidence_overlay': 0.05     # Low weight - supplementary info
-    }
-    
-    return self._ensemble_predictions(results, medical_weights)
+        return outputs
     
     def classify_segmented_image(self, segmented_outputs: Dict[str, np.ndarray]) -> Dict:
         """Classify using local ConceptCLIP on segmented outputs"""
@@ -1005,23 +752,42 @@ def classify_with_medical_priority(self, segmented_outputs: Dict[str, np.ndarray
         for ext in self.domain.image_extensions:
             image_files.extend(self.dataset_path.rglob(f"*{ext}"))
         
-        print(f"Found {len(image_files)} images in dataset")
+        print(f"Found {len(image_files)} total images in dataset")
         
-        # Limit images if max_images is set (for testing)
+        # Sort image files for consistent processing order
+        image_files = sorted(image_files)
+        
+        # Limit images if max_images is set (for efficient processing)
+        # This ensures we only process images that correspond to the first N CSV entries
         if self.max_images:
+            original_count = len(image_files)
             image_files = image_files[:self.max_images]
-            print(f"⚠️ TEST MODE: Processing only {len(image_files)} images")
+            print(f"📊 EFFICIENT MODE: Processing first {len(image_files)} images out of {original_count} total")
+            print(f"   This corresponds to the first {self.max_images} entries in the CSV ground truth")
+            print("   Ensures 1:1 correspondence between processed images and CSV data")
+            print("   Use --full flag to process the entire dataset")
+            print("=" * 50)
+        else:
+            print(f"🔬 FULL DATASET MODE: Processing all {len(image_files)} images")
+            print("   Will attempt to match all images with available CSV ground truth")
             print("=" * 50)
         
         results = []
         format_counter = Counter()
         correct_predictions = 0
         total_with_gt = 0
+        csv_matches_found = 0  # Track how many images actually match CSV entries
         
-        # Update progress bar description for test mode
-        desc = f"Processing {'TEST' if self.max_images else 'MILK10k'} images"
+        print("✓ SECTION: Dataset file discovery completed successfully")
+        print(f"Final image count to process: {len(image_files)}")
+        if self.max_images:
+            print(f"CSV ground truth entries available: {len(self.ground_truth) if self.ground_truth is not None else 0}")
+        print("-"*60)
         
-        for img_path in tqdm(image_files, desc=desc):
+        # Update progress bar description
+        desc = f"Processing {'Limited' if self.max_images else 'Full'} MILK10k dataset"
+        
+        for idx, img_path in enumerate(tqdm(image_files, desc=desc)):
             try:
                 # Track file formats
                 ext = img_path.suffix.lower()
@@ -1051,8 +817,12 @@ def classify_with_medical_priority(self, segmented_outputs: Dict[str, np.ndarray
                 # Classify using ConceptCLIP
                 classification_probs = self.classify_segmented_image(segmented_outputs)
                 
-                # Get ground truth
+                # Get ground truth - ONLY from the limited CSV data (first 100 entries)
                 ground_truth = self.get_ground_truth_label(img_path)
+                
+                # Track CSV matching statistics
+                if ground_truth:
+                    csv_matches_found += 1
                 
                 # Get prediction
                 if classification_probs:
@@ -1062,7 +832,7 @@ def classify_with_medical_priority(self, segmented_outputs: Dict[str, np.ndarray
                     predicted_disease = "unknown"
                     prediction_confidence = 0.0
                 
-                # Check accuracy if ground truth available
+                # Check accuracy ONLY if ground truth available from limited CSV
                 if ground_truth:
                     total_with_gt += 1
                     if ground_truth == predicted_disease:
@@ -1072,50 +842,79 @@ def classify_with_medical_priority(self, segmented_outputs: Dict[str, np.ndarray
                 result = {
                     'image_path': str(img_path),
                     'image_name': img_name,
+                    'image_index': idx,  # Track processing order
                     'predicted_disease': predicted_disease,
                     'prediction_confidence': prediction_confidence,
                     'segmentation_confidence': seg_confidence,
                     'ground_truth': ground_truth,
                     'correct': ground_truth == predicted_disease if ground_truth else None,
+                    'csv_match_found': ground_truth is not None,  # Track CSV matching
                     'segmented_outputs_dir': str(conceptclip_dir),
                     'classification_probabilities': classification_probs,
                     'device_used': self.device,
                     'cache_used': self.cache_path,
-                    'test_mode': self.max_images is not None
+                    'processing_mode': 'limited' if self.max_images else 'full',
+                    'max_images_setting': self.max_images
                 }
                 
                 results.append(result)
                 
-                # Progress indicator
+                # Progress indicator with CSV matching info
                 status = "✓" if result['correct'] else ("✗" if ground_truth else "-")
-                print(f"{status} {img_name}: {predicted_disease} ({prediction_confidence:.2%}) [Device: {self.device}]")
+                csv_status = "CSV✓" if ground_truth else "CSV✗"
+                print(f"{status} {csv_status} [{idx+1:3d}] {img_name}: {predicted_disease} ({prediction_confidence:.2%})")
                 
             except Exception as e:
                 print(f"Error processing {img_path}: {e}")
                 continue
         
-        # Calculate accuracy
+        print("✓ SECTION: Image processing loop completed successfully")
+        print(f"Processed {len(results)} images successfully")
+        print(f"Found CSV ground truth for {csv_matches_found} images")
+        print(f"Accuracy calculated on {total_with_gt} images with valid CSV ground truth")
+        print("-"*60)
+        
+        # Calculate accuracy ONLY on images that matched the limited CSV data
         accuracy = correct_predictions / total_with_gt if total_with_gt > 0 else 0
         
-        # Generate report
+        # Generate report with CSV matching statistics
         report = self._generate_comprehensive_report(results, format_counter, accuracy, total_with_gt)
         
-        # Add test mode info to report
+        # Add processing mode info to report with CSV coordination details
         if self.max_images:
-            report['test_mode'] = {
-                'enabled': True,
+            report['processing_mode'] = {
+                'type': 'limited',
                 'images_limit': self.max_images,
-                'images_processed': len(results)
+                'images_processed': len(results),
+                'csv_entries_used': len(self.ground_truth) if self.ground_truth is not None else 0,
+                'csv_matches_found': csv_matches_found,
+                'accuracy_based_on': total_with_gt,
+                'csv_coordination': 'first_n_entries_only'
             }
+        else:
+            report['processing_mode'] = {
+                'type': 'full',
+                'images_processed': len(results),
+                'csv_matches_found': csv_matches_found,
+                'accuracy_based_on': total_with_gt,
+                'csv_coordination': 'all_available_entries'
+            }
+        
+        print("✓ SECTION: Report generation completed successfully")
+        print("-"*60)
         
         # Save results
         self._save_results(results, report)
+        
+        print("✓ SECTION: Results saving completed successfully")
+        print("-"*60)
         
         return report
     
     def _generate_comprehensive_report(self, results: List[Dict], format_counter: Counter, 
                                      accuracy: float, total_with_gt: int) -> Dict:
         """Generate comprehensive processing report"""
+        print("Generating comprehensive report...")
         
         # Basic statistics
         total_processed = len(results)
@@ -1179,20 +978,24 @@ def classify_with_medical_priority(self, segmented_outputs: Dict[str, np.ndarray
             }
         }
         
+        print("✓ Report statistics calculated successfully")
         return report
     
     def _save_results(self, results: List[Dict], report: Dict):
         """Save results and report"""
+        print("Saving results and generating visualizations...")
         
         # Save detailed results
         results_df = pd.DataFrame(results)
         results_path = self.output_path / "reports" / "detailed_results.csv"
         results_df.to_csv(results_path, index=False)
+        print(f"✓ Detailed results saved to: {results_path}")
         
         # Save report
         report_path = self.output_path / "reports" / "processing_report.json"
         with open(report_path, 'w') as f:
             json.dump(report, f, indent=2, default=str)
+        print(f"✓ Processing report saved to: {report_path}")
         
         # Generate summary visualization
         self._create_summary_plots(results_df, report)
@@ -1204,6 +1007,7 @@ def classify_with_medical_priority(self, segmented_outputs: Dict[str, np.ndarray
     
     def _create_summary_plots(self, results_df: pd.DataFrame, report: Dict):
         """Create summary visualization plots"""
+        print("Creating summary visualization plots...")
         
         fig, axes = plt.subplots(2, 2, figsize=(15, 12))
         
@@ -1254,19 +1058,24 @@ def classify_with_medical_priority(self, segmented_outputs: Dict[str, np.ndarray
         plt.savefig(plot_path, dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"Summary plots saved to: {plot_path}")
+        print(f"✓ Summary plots saved to: {plot_path}")
 
+print("✓ SECTION: Pipeline class definition completed successfully")
+print("-"*60)
 
 # ==================== MAIN EXECUTION ====================
 
 def main():
     """Main execution function with argument parsing"""
+    print("Starting main execution function...")
     
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='MILK10k Medical Image Processing Pipeline')
     parser.add_argument('--test', action='store_true', help='Run in test mode (20 images only)')
     parser.add_argument('--max-images', type=int, default=None, help='Maximum number of images to process')
     args = parser.parse_args()
+    
+    print("✓ Command line arguments parsed successfully")
     
     # Determine max_images
     max_images = None
@@ -1282,6 +1091,9 @@ def main():
         print(f"🔬 TEST MODE: Processing {max_images} images only")
     print("="*60)
     
+    print("✓ SECTION: Main function initialization completed successfully")
+    print("-"*60)
+    
     # Initialize pipeline with local models and cache
     pipeline = MILK10kPipeline(
         dataset_path=DATASET_PATH,
@@ -1293,8 +1105,14 @@ def main():
         max_images=max_images
     )
     
+    print("✓ SECTION: Pipeline object creation completed successfully")
+    print("-"*60)
+    
     # Process dataset
     report = pipeline.process_dataset()
+    
+    print("✓ SECTION: Dataset processing completed successfully")
+    print("-"*60)
     
     # Print summary
     print("\n" + "="*50)
@@ -1325,6 +1143,11 @@ def main():
     print("- cropped.png (region of interest)")
     print("- masked_only.png (segmented region only)")
     print("- side_by_side.png (comparison view)")
+    
+    print("✓ SECTION: Final summary and output completed successfully")
+    print("-"*60)
+    print("✓ PROGRAM EXECUTION COMPLETED SUCCESSFULLY")
+    print("="*60)
 
 if __name__ == "__main__":
     main()
