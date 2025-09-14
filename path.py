@@ -537,55 +537,188 @@ class MILK10kPipeline:
         
         return np.array(roi_points)
     
-    def create_segmented_outputs(self, image: np.ndarray, mask: np.ndarray) -> Dict[str, np.ndarray]:
-        """Create multiple segmented outputs for ConceptCLIP"""
-        outputs = {}
-        
-        # 1. Original image with colored overlay
-        color = (255, 0, 0)  # Red highlight
-        overlay = image.copy()
-        overlay[mask == 1] = color
-        colored_overlay = cv2.addWeighted(image, 0.7, overlay, 0.3, 0)
-        outputs['colored_overlay'] = colored_overlay
-        
-        # 2. Contour highlighting
-        contour_image = image.copy()
-        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(contour_image, contours, -1, (0, 255, 0), 3)
-        outputs['contour'] = contour_image
-        
-        # 3. Cropped to bounding box
-        coords = np.where(mask == 1)
-        if len(coords[0]) > 0:
-            y_min, y_max = coords[0].min(), coords[0].max()
-            x_min, x_max = coords[1].min(), coords[1].max()
+    def create_medical_segmentation_outputs(self, image: np.ndarray, mask: np.ndarray) -> Dict[str, np.ndarray]:
+    """
+    Create medical-standard segmentation visualizations
+    Focuses on clinically relevant presentations
+    """
+    outputs = {}
+    h, w = image.shape[:2]
+    
+    # 1. CLINICAL STANDARD: Semi-transparent colored overlay
+    # This is the most common presentation in medical imaging
+    overlay_color = (255, 100, 100)  # Soft red for pathology
+    alpha = 0.4  # Semi-transparent
+    
+    overlay = image.copy()
+    colored_mask = np.zeros_like(image)
+    colored_mask[mask == 1] = overlay_color
+    
+    clinical_overlay = cv2.addWeighted(image, 1-alpha, colored_mask, alpha, 0)
+    outputs['clinical_overlay'] = clinical_overlay
+    
+    # 2. CONTOUR HIGHLIGHTING: Professional medical standard
+    contour_image = image.copy()
+    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Use medical-standard colors
+    cv2.drawContours(contour_image, contours, -1, (0, 255, 255), 2)  # Cyan outline
+    outputs['medical_contour'] = contour_image
+    
+    # 3. MULTI-COLOR OVERLAY: Different colors for different confidence levels
+    if hasattr(self, 'segmentation_confidence'):
+        conf = getattr(self, 'segmentation_confidence', 0.8)
+        if conf > 0.8:
+            color = (255, 0, 0)  # High confidence: Red
+        elif conf > 0.6:
+            color = (255, 165, 0)  # Medium confidence: Orange  
+        else:
+            color = (255, 255, 0)  # Low confidence: Yellow
             
-            # Add padding
-            h, w = image.shape[:2]
-            padding = 20
-            y_min = max(0, y_min - padding)
-            y_max = min(h, y_max + padding)
-            x_min = max(0, x_min - padding)
-            x_max = min(w, x_max + padding)
+        conf_overlay = image.copy()
+        conf_mask = np.zeros_like(image)
+        conf_mask[mask == 1] = color
+        confidence_viz = cv2.addWeighted(image, 0.7, conf_mask, 0.3, 0)
+        outputs['confidence_overlay'] = confidence_viz
+    
+    # 4. ANNOTATED VERSION: With measurement info
+    annotated = clinical_overlay.copy()
+    
+    # Calculate basic measurements
+    area_pixels = np.sum(mask)
+    area_percentage = (area_pixels / (h * w)) * 100
+    
+    # Find centroid for annotation placement
+    coords = np.where(mask == 1)
+    if len(coords[0]) > 0:
+        centroid_y = int(np.mean(coords[0]))
+        centroid_x = int(np.mean(coords[1]))
+        
+        # Add annotation text
+        annotation_text = f"Area: {area_percentage:.1f}%"
+        cv2.putText(annotated, annotation_text, 
+                   (centroid_x - 50, centroid_y - 10),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Add arrow pointing to centroid
+        cv2.arrowedLine(annotated, 
+                       (centroid_x - 80, centroid_y - 30),
+                       (centroid_x - 10, centroid_y - 15),
+                       (255, 255, 255), 2)
+    
+    outputs['annotated_clinical'] = annotated
+    
+    # 5. HEATMAP STYLE: For uncertainty visualization
+    # Convert mask to heatmap overlay
+    heatmap = cv2.applyColorMap((mask * 255).astype(np.uint8), cv2.COLORMAP_HOT)
+    heatmap_overlay = cv2.addWeighted(image, 0.7, heatmap, 0.3, 0)
+    outputs['heatmap_overlay'] = heatmap_overlay
+    
+    # 6. SIDE-BY-SIDE COMPARISON: Original vs. Segmented
+    # Resize for consistent display
+    comparison = np.hstack([
+        cv2.putText(image.copy(), "Original", (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2),
+        cv2.putText(clinical_overlay.copy(), "Segmented", (10, 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+    ])
+    outputs['clinical_comparison'] = comparison
+    
+    # 7. CROPPED WITH CONTEXT: Bounding box + padding for context
+    coords = np.where(mask == 1)
+    if len(coords[0]) > 0:
+        y_min, y_max = coords[0].min(), coords[0].max()
+        x_min, x_max = coords[1].min(), coords[1].max()
+        
+        # Add substantial padding for medical context
+        padding = max(50, min(h, w) // 10)  # Adaptive padding
+        y_min = max(0, y_min - padding)
+        y_max = min(h, y_max + padding)
+        x_min = max(0, x_min - padding)
+        x_max = min(w, x_max + padding)
+        
+        # Crop both original and segmented versions
+        cropped_original = image[y_min:y_max, x_min:x_max]
+        cropped_segmented = clinical_overlay[y_min:y_max, x_min:x_max]
+        
+        outputs['cropped_context'] = cropped_segmented
+        outputs['cropped_original'] = cropped_original
+    
+    return outputs
+
+def get_priority_outputs_for_conceptclip(self, segmented_outputs: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+    """
+    Return the most clinically relevant outputs for ConceptCLIP classification
+    """
+    priority_outputs = {}
+    
+    # Priority order for medical classification
+    priority_keys = [
+        'clinical_overlay',      # Most important: full context with clear segmentation
+        'medical_contour',       # Second: boundary emphasis
+        'annotated_clinical',    # Third: with measurements
+        'cropped_context',       # Fourth: focused region with context
+        'confidence_overlay'     # Fifth: confidence-based coloring
+    ]
+    
+    for key in priority_keys:
+        if key in segmented_outputs:
+            priority_outputs[key] = segmented_outputs[key]
+    
+    return priority_outputs
+
+def classify_with_medical_priority(self, segmented_outputs: Dict[str, np.ndarray]) -> Dict:
+    """
+    Enhanced classification focusing on medically relevant visualizations
+    """
+    # Get priority outputs for classification
+    priority_outputs = self.get_priority_outputs_for_conceptclip(segmented_outputs)
+    
+    results = {}
+    
+    # Classify each priority output
+    for output_type, seg_image in priority_outputs.items():
+        if seg_image is not None and seg_image.size > 0:
+            seg_pil = Image.fromarray(seg_image.astype(np.uint8))
             
-            cropped = image[y_min:y_max, x_min:x_max]
-            outputs['cropped'] = cropped
-        
-        # 4. Masked region only (with black background)
-        masked_only = image.copy()
-        masked_only[mask == 0] = [0, 0, 0]
-        outputs['masked_only'] = masked_only
-        
-        # 5. Side-by-side comparison
-        if 'cropped' in outputs:
-            # Resize cropped to match original height for side-by-side
-            h_orig = image.shape[0]
-            cropped_resized = cv2.resize(outputs['cropped'], 
-                                       (int(outputs['cropped'].shape[1] * h_orig / outputs['cropped'].shape[0]), h_orig))
-            side_by_side = np.hstack([image, cropped_resized])
-            outputs['side_by_side'] = side_by_side
-        
-        return outputs
+            # Use ConceptCLIP processor
+            inputs = self.conceptclip_processor(
+                images=seg_pil, 
+                text=self.domain.text_prompts,
+                return_tensors='pt',
+                padding=True,
+                truncation=True
+            )
+            
+            # Move inputs to device
+            inputs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v 
+                     for k, v in inputs.items()}
+            
+            with torch.no_grad():
+                outputs = self.conceptclip_model(**inputs)
+                
+                logit_scale = outputs.get("logit_scale", torch.tensor(1.0))
+                image_features = outputs["image_features"]
+                text_features = outputs["text_features"]
+                
+                # Compute similarity scores
+                logits = (logit_scale * image_features @ text_features.t()).softmax(dim=-1)[0]
+            
+            # Convert to probabilities
+            disease_names = [prompt.split(' showing ')[-1] for prompt in self.domain.text_prompts]
+            probabilities = {disease_names[i]: float(logits[i]) for i in range(len(disease_names))}
+            results[output_type] = probabilities
+    
+    # Medical-focused ensemble weights
+    medical_weights = {
+        'clinical_overlay': 0.35,      # Highest weight - standard medical presentation
+        'medical_contour': 0.25,       # High weight - clear boundaries
+        'annotated_clinical': 0.20,    # Good weight - includes measurements
+        'cropped_context': 0.15,       # Moderate weight - focused view
+        'confidence_overlay': 0.05     # Low weight - supplementary info
+    }
+    
+    return self._ensemble_predictions(results, medical_weights)
     
     def classify_segmented_image(self, segmented_outputs: Dict[str, np.ndarray]) -> Dict:
         """Classify using local ConceptCLIP on segmented outputs"""
