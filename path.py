@@ -295,37 +295,55 @@ class MedicalDomain:
     preprocessing_params: Dict
     segmentation_strategy: str
 
-# MILK10k Medical Domain Configuration
 MILK10K_DOMAIN = MedicalDomain(
     name="milk10k",
     image_extensions=['.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.dcm', '.dicom'],
     text_prompts=[
-        'a medical image showing normal tissue',
-        'a medical image showing abnormal pathology',
-        'a medical image showing inflammatory lesion',
-        'a medical image showing neoplastic lesion',
-        'a medical image showing degenerative changes',
-        'a medical image showing infectious disease',
-        'a medical image showing vascular pathology',
-        'a medical image showing metabolic disorder',
-        'a medical image showing congenital abnormality',
-        'a medical image showing traumatic injury'
+        'a dermatoscopic image showing actinic keratosis',
+        'a dermatoscopic image showing basal cell carcinoma',
+        'a dermatoscopic image showing benign proliferation',
+        'a dermatoscopic image showing benign keratinocytic lesion',
+        'a dermatoscopic image showing dermatofibroma',
+        'a dermatoscopic image showing inflammatory condition',
+        'a dermatoscopic image showing malignant proliferation',
+        'a dermatoscopic image showing melanoma',
+        'a dermatoscopic image showing melanocytic nevus',
+        'a dermatoscopic image showing squamous cell carcinoma',
+        'a dermatoscopic image showing vascular lesion'
     ],
     label_mappings={
-        'NORMAL': 'normal tissue',
-        'ABNORMAL': 'abnormal pathology',
-        'INFLAMMATORY': 'inflammatory lesion',
-        'NEOPLASTIC': 'neoplastic lesion',
-        'DEGENERATIVE': 'degenerative changes',
-        'INFECTIOUS': 'infectious disease',
-        'VASCULAR': 'vascular pathology',
-        'METABOLIC': 'metabolic disorder',
-        'CONGENITAL': 'congenital abnormality',
-        'TRAUMATIC': 'traumatic injury'
+        'AKIEC': 'actinic keratosis',
+        'BCC': 'basal cell carcinoma',
+        'BEN_OTH': 'benign proliferation',
+        'BKL': 'benign keratinocytic lesion',
+        'DF': 'dermatofibroma',
+        'INF': 'inflammatory condition',
+        'MAL_OTH': 'malignant proliferation',
+        'MEL': 'melanoma',
+        'NV': 'melanocytic nevus',
+        'SCCKA': 'squamous cell carcinoma',
+        'VASC': 'vascular lesion'
     },
     preprocessing_params={'normalize': True, 'enhance_contrast': True},
-    segmentation_strategy='adaptive'
+    class_names=[
+        'actinic keratosis',
+        'basal cell carcinoma',
+        'benign proliferation',
+        'benign keratinocytic lesion',
+        'dermatofibroma',
+        'inflammatory condition',
+        'malignant proliferation',
+        'melanoma',
+        'melanocytic nevus',
+        'squamous cell carcinoma',
+        'vascular lesion'
+    ]
 )
+
+print(f"✓ MILK10k domain configured with {len(MILK10K_DOMAIN.class_names)} classes")
+print("✓ SECTION: Domain configuration completed successfully")
+print("-"*60)
+
 
 # ==================== MAIN PIPELINE CLASS ====================
 
