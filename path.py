@@ -1,5 +1,6 @@
 # MILK10k Medical Image Segmentation and Classification Pipeline
-# Test version with 20 image limit for validation
+# Updated for folder-based dataset structure
+# Test version with configurable image limit for validation
 
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -312,7 +313,7 @@ class MedicalDomain:
     label_mappings: Dict[str, str]
     preprocessing_params: Dict
     segmentation_strategy: str
-    class_names: List[str]  # Add this line
+    class_names: List[str]
 
 MILK10K_DOMAIN = MedicalDomain(
     name="milk10k",
@@ -367,12 +368,12 @@ print("-"*60)
 # ==================== MAIN PIPELINE CLASS ====================
 
 class MILK10kPipeline:
-    """MILK10k segmentation and classification pipeline"""
+    """MILK10k segmentation and classification pipeline for folder-based dataset"""
     
     def __init__(self, dataset_path: str, groundtruth_path: str, output_path: str, 
                  sam2_model_path: str = None, conceptclip_model_path: str = None,
-                 cache_path: str = None, max_images: int = None):
-        print("Initializing MILK10k Pipeline...")
+                 cache_path: str = None, max_folders: int = None):
+        print("Initializing MILK10k Pipeline for folder-based dataset...")
         
         self.dataset_path = Path(dataset_path)
         self.groundtruth_path = groundtruth_path
@@ -381,7 +382,7 @@ class MILK10kPipeline:
         self.conceptclip_model_path = conceptclip_model_path or CONCEPTCLIP_MODEL_PATH
         self.cache_path = cache_path or HUGGINGFACE_CACHE_PATH
         self.domain = MILK10K_DOMAIN
-        self.max_images = max_images  # Store max_images limit
+        self.max_folders = max_folders  # Changed from max_images to max_folders
         
         # Create output directories
         self.output_path.mkdir(parents=True, exist_ok=True)
@@ -431,9 +432,26 @@ class MILK10kPipeline:
             self.ground_truth = pd.read_csv(self.groundtruth_path)
             print(f"Loaded ground truth: {len(self.ground_truth)} samples")
             print(f"Ground truth columns: {list(self.ground_truth.columns)}")
+            
+            # Create a lookup dictionary for faster access
+            self.gt_lookup = {}
+            for _, row in self.ground_truth.iterrows():
+                lesion_id = row['lesion_id']
+                
+                # Find which disease column has value 1
+                disease_columns = ['AKIEC', 'BCC', 'BEN_OTH', 'BKL', 'DF', 'INF', 
+                                  'MAL_OTH', 'MEL', 'NV', 'SCCKA', 'VASC']
+                
+                for col in disease_columns:
+                    if col in row and float(row[col]) == 1.0:
+                        self.gt_lookup[lesion_id] = self.domain.label_mappings[col]
+                        break
+                        
+            print(f"✓ Created lookup table for {len(self.gt_lookup)} lesions")
         else:
             print(f"Ground truth file not found: {self.groundtruth_path}")
             self.ground_truth = None
+            self.gt_lookup = {}
             
         print("✓ SECTION: Ground truth loading completed successfully")
         print("-"*60)
@@ -719,110 +737,25 @@ class MILK10kPipeline:
         
         return final_probs
     
-    def get_ground_truth_label(self, img_path: Path) -> Optional[str]:
-        """Get ground truth label for image"""
-        if self.ground_truth is None:
-            return None
+    def process_folder(self, folder_path: Path) -> Dict:
+        """Process all images in a single lesion folder"""
+        folder_results = []
+        lesion_id = folder_path.name
         
-        img_name = img_path.stem
-        
-        # Remove any file extensions that might be in the stem
-        img_name = img_name.split('.')[0]
-        
-        # Handle different naming patterns
-        # Your CSV uses IL_XXXXXXX format
-        if not img_name.startswith('IL_'):
-            # If image is named like "9980498.jpg", convert to "IL_9980498"
-            img_name = f'IL_{img_name}'
-        
-        # Try exact match first
-        matching_rows = self.ground_truth[
-            self.ground_truth['lesion_id'] == img_name
-        ]
-        
-        # If no exact match, try without underscore (IL9980498 vs IL_9980498)
-        if len(matching_rows) == 0:
-            alt_name = img_name.replace('_', '')
-            matching_rows = self.ground_truth[
-                self.ground_truth['lesion_id'].str.replace('_', '') == alt_name
-            ]
-        
-        if len(matching_rows) > 0:
-            row = matching_rows.iloc[0]
-            
-            # Check each disease column
-            disease_columns = ['AKIEC', 'BCC', 'BEN_OTH', 'BKL', 'DF', 'INF', 
-                              'MAL_OTH', 'MEL', 'NV', 'SCCKA', 'VASC']
-            
-            for col in disease_columns:
-                if col in self.ground_truth.columns:
-                    # Handle both 1.0 and 1 values
-                    if float(row[col]) == 1.0:
-                        return self.domain.label_mappings[col]
-        
-        return None
-        
-    def process_dataset(self) -> Dict:
-        """Process entire MILK10k dataset or limited subset for testing"""
-        print("Starting MILK10k dataset processing...")
-        
-        # Find all images
+        # Find all images in the folder
         image_files = []
         for ext in self.domain.image_extensions:
-            image_files.extend(self.dataset_path.rglob(f"*{ext}"))
+            image_files.extend(folder_path.glob(f"*{ext}"))
         
-        print(f"Found {len(image_files)} total images in dataset")
+        if not image_files:
+            print(f"No images found in folder: {lesion_id}")
+            return None
         
-        # Sort for consistent order
-        image_files = sorted(image_files)
+        print(f"Processing folder {lesion_id} with {len(image_files)} images")
         
-        # Debug: Show first few image names and corresponding CSV entries
-        if self.ground_truth is not None:
-            print("\n📊 Verifying image-CSV matching:")
-            print("First 5 image files found:")
-            for i, img in enumerate(image_files[:5]):
-                print(f"  {i+1}. {img.name}")
-            
-            print("\nFirst 5 CSV lesion_ids:")
-            for i, lesion_id in enumerate(self.ground_truth['lesion_id'].head(5)):
-                print(f"  {i+1}. {lesion_id}")
-            print("-"*50)
-        
-        # Limit images if specified
-        if self.max_images:
-            original_count = len(image_files)
-            image_files = image_files[:self.max_images]
-            print(f"📊 Processing {len(image_files)} images out of {original_count} total")
-            print(f"   This corresponds to the first {self.max_images} entries in the CSV ground truth")
-            print("   Ensures 1:1 correspondence between processed images and CSV data")
-            print("   Use --full flag to process the entire dataset")
-            print("=" * 50)
-        else:
-            print(f"🔬 FULL DATASET MODE: Processing all {len(image_files)} images")
-            print("   Will attempt to match all images with available CSV ground truth")
-            print("=" * 50)
-        
-        results = []
-        format_counter = Counter()
-        correct_predictions = 0
-        total_with_gt = 0
-        csv_matches_found = 0  # Track how many images actually match CSV entries
-        
-        print("✓ SECTION: Dataset file discovery completed successfully")
-        print(f"Final image count to process: {len(image_files)}")
-        if self.max_images:
-            print(f"CSV ground truth entries available: {len(self.ground_truth) if self.ground_truth is not None else 0}")
-        print("-"*60)
-        
-        # Update progress bar description
-        desc = f"Processing {'Limited' if self.max_images else 'Full'} MILK10k dataset"
-        
-        for idx, img_path in enumerate(tqdm(image_files, desc=desc)):
+        # Process each image in the folder
+        for img_idx, img_path in enumerate(image_files):
             try:
-                # Track file formats
-                ext = img_path.suffix.lower()
-                format_counter[ext] += 1
-                
                 # Load and preprocess image
                 image = self.preprocess_image(img_path)
                 if image is None:
@@ -836,8 +769,8 @@ class MILK10kPipeline:
                 
                 # Save segmented outputs for ConceptCLIP input
                 img_name = img_path.stem
-                conceptclip_dir = self.output_path / "segmented_for_conceptclip" / img_name
-                conceptclip_dir.mkdir(exist_ok=True, parents=True)  # Added parents=True
+                conceptclip_dir = self.output_path / "segmented_for_conceptclip" / lesion_id / img_name
+                conceptclip_dir.mkdir(exist_ok=True, parents=True)
                 
                 for output_type, seg_image in segmented_outputs.items():
                     if seg_image is not None:
@@ -847,13 +780,6 @@ class MILK10kPipeline:
                 # Classify using ConceptCLIP
                 classification_probs = self.classify_segmented_image(segmented_outputs)
                 
-                # Get ground truth
-                ground_truth = self.get_ground_truth_label(img_path)
-                
-                # Track CSV matching statistics
-                if ground_truth:
-                    csv_matches_found += 1
-                
                 # Get prediction
                 if classification_probs:
                     predicted_disease = max(classification_probs, key=classification_probs.get)
@@ -862,281 +788,250 @@ class MILK10kPipeline:
                     predicted_disease = "unknown"
                     prediction_confidence = 0.0
                 
-                # Check accuracy ONLY if ground truth available
-                if ground_truth:
-                    total_with_gt += 1
-                    if ground_truth == predicted_disease:
-                        correct_predictions += 1
-                
-                # Save results
-                result = {
+                # Store individual image result
+                image_result = {
+                    'lesion_id': lesion_id,
                     'image_path': str(img_path),
                     'image_name': img_name,
-                    'image_index': idx,  # Track processing order
+                    'image_index_in_folder': img_idx,
                     'predicted_disease': predicted_disease,
                     'prediction_confidence': prediction_confidence,
                     'segmentation_confidence': seg_confidence,
-                    'ground_truth': ground_truth,
-                    'correct': ground_truth == predicted_disease if ground_truth else None,
-                    'csv_match_found': ground_truth is not None,  # Track CSV matching
-                    'segmented_outputs_dir': str(conceptclip_dir),
                     'classification_probabilities': classification_probs,
-                    'device_used': self.device,
-                    'cache_used': self.cache_path,
-                    'processing_mode': 'limited' if self.max_images else 'full',
-                    'max_images_setting': self.max_images
+                    'segmented_outputs_dir': str(conceptclip_dir)
                 }
                 
-                results.append(result)
-                
-                # Progress indicator with CSV matching info
-                status = "✓" if result['correct'] else ("✗" if ground_truth else "-")
-                csv_status = "CSV✓" if ground_truth else "CSV✗"
-                print(f"{status} {csv_status} [{idx+1:3d}] {img_name}: {predicted_disease} ({prediction_confidence:.2%})")
+                folder_results.append(image_result)
                 
             except Exception as e:
-                print(f"Error processing {img_path}: {e}")
+                print(f"Error processing image {img_path}: {e}")
                 continue
         
-        print("✓ SECTION: Image processing loop completed successfully")
-        print(f"Processed {len(results)} images successfully")
-        print(f"Found CSV ground truth for {csv_matches_found} images")
-        print(f"Accuracy calculated on {total_with_gt} images with valid CSV ground truth")
-        print("-"*60)
+        if not folder_results:
+            return None
         
-        # Calculate accuracy ONLY on images that matched the CSV data
-        accuracy = correct_predictions / total_with_gt if total_with_gt > 0 else 0
+        # Aggregate results for the folder (ensemble across all images)
+        folder_prediction = self._aggregate_folder_predictions(folder_results)
         
-        # Generate report with CSV matching statistics
-        report = self._generate_comprehensive_report(results, format_counter, accuracy, total_with_gt)
+        # Get ground truth for this lesion
+        ground_truth = self.gt_lookup.get(lesion_id, None)
         
-        # Add processing mode info to report with CSV coordination details
-        if self.max_images:
-            report['processing_mode'] = {
-                'type': 'limited',
-                'images_limit': self.max_images,
-                'images_processed': len(results),
-                'csv_entries_used': len(self.ground_truth) if self.ground_truth is not None else 0,
-                'csv_matches_found': csv_matches_found,
-                'accuracy_based_on': total_with_gt,
-                'csv_coordination': 'first_n_entries_only'
-            }
-        else:
-            report['processing_mode'] = {
-                'type': 'full',
-                'images_processed': len(results),
-                'csv_matches_found': csv_matches_found,
-                'accuracy_based_on': total_with_gt,
-                'csv_coordination': 'all_available_entries'
-            }
+        # Check if prediction matches ground truth
+        is_correct = ground_truth == folder_prediction['predicted_disease'] if ground_truth else None
         
-        print("✓ SECTION: Report generation completed successfully")
-        print("-"*60)
+        return {
+            'lesion_id': lesion_id,
+            'num_images': len(folder_results),
+            'individual_images': folder_results,
+            'folder_prediction': folder_prediction,
+            'ground_truth': ground_truth,
+            'is_correct': is_correct,
+            'csv_match_found': ground_truth is not None
+        }
+    
+    def _aggregate_folder_predictions(self, folder_results: List[Dict]) -> Dict:
+        """Aggregate predictions from multiple images in the same folder"""
+        if not folder_results:
+            return {'predicted_disease': 'unknown', 'prediction_confidence': 0.0}
         
-        # Save results
-        self._save_results(results, report)
+        # Strategy 1: Average probabilities across all images
+        all_diseases = self.domain.class_names
+        avg_probs = {disease: 0.0 for disease in all_diseases}
         
-        print("✓ SECTION: Results saving completed successfully")
-        print("-"*60)
+        for result in folder_results:
+            probs = result.get('classification_probabilities', {})
+            for disease in all_diseases:
+                if disease in probs:
+                    avg_probs[disease] += probs[disease]
         
-        return report
+        # Average the probabilities
+        num_images = len(folder_results)
+        for disease in avg_probs:
+            avg_probs[disease] /= num_images
+        
+        # Get final prediction
+        predicted_disease = max(avg_probs, key=avg_probs.get)
+        prediction_confidence = avg_probs[predicted_disease]
+        
+        # Strategy 2: Majority vote (alternative approach)
+        predictions = [result['predicted_disease'] for result in folder_results]
+        prediction_counts = Counter(predictions)
+        majority_prediction = prediction_counts.most_common(1)[0][0]
+        
+        return {
+            'predicted_disease': predicted_disease,
+            'prediction_confidence': prediction_confidence,
+            'average_probabilities': avg_probs,
+            'majority_vote_prediction': majority_prediction,
+            'prediction_counts': dict(prediction_counts),
+            'aggregation_method': 'average_probabilities'
+        }
     
     def process_dataset(self) -> Dict:
-        """Process entire MILK10k dataset or limited subset for testing"""
-        print("Starting MILK10k dataset processing...")
+        """Process entire MILK10k folder-based dataset"""
+        print("Starting MILK10k folder-based dataset processing...")
         
-        # Find all images
-        image_files = []
-        for ext in self.domain.image_extensions:
-            image_files.extend(self.dataset_path.rglob(f"*{ext}"))
+        # Find all lesion folders
+        lesion_folders = [f for f in self.dataset_path.iterdir() 
+                         if f.is_dir() and not f.name.startswith('.')]
         
-        print(f"Found {len(image_files)} total images in dataset")
+        print(f"Found {len(lesion_folders)} lesion folders in dataset")
         
         # Sort for consistent order
-        image_files = sorted(image_files)
+        lesion_folders = sorted(lesion_folders, key=lambda x: x.name)
         
-        # Debug: Show first few image names and corresponding CSV entries
+        # Debug: Show first few folders and corresponding CSV entries
         if self.ground_truth is not None:
-            print("\n📊 Verifying image-CSV matching:")
-            print("First 5 image files found:")
-            for i, img in enumerate(image_files[:5]):
-                print(f"  {i+1}. {img.name}")
+            print("\n📊 Verifying folder-CSV matching:")
+            print("First 5 lesion folders found:")
+            for i, folder in enumerate(lesion_folders[:5]):
+                print(f"  {i+1}. {folder.name}")
             
             print("\nFirst 5 CSV lesion_ids:")
             for i, lesion_id in enumerate(self.ground_truth['lesion_id'].head(5)):
                 print(f"  {i+1}. {lesion_id}")
             print("-"*50)
         
-        # Limit images if specified
-        if self.max_images:
-            original_count = len(image_files)
-            image_files = image_files[:self.max_images]
-            print(f"📊 Processing {len(image_files)} images out of {original_count} total")
-            print(f"   This corresponds to the first {self.max_images} entries in the CSV ground truth")
-            print("   Ensures 1:1 correspondence between processed images and CSV data")
+        # Limit folders if specified
+        if self.max_folders:
+            original_count = len(lesion_folders)
+            lesion_folders = lesion_folders[:self.max_folders]
+            print(f"📊 Processing {len(lesion_folders)} folders out of {original_count} total")
+            print(f"   Limited processing for testing purposes")
             print("   Use --full flag to process the entire dataset")
             print("=" * 50)
         else:
-            print(f"🔬 FULL DATASET MODE: Processing all {len(image_files)} images")
-            print("   Will attempt to match all images with available CSV ground truth")
+            print(f"🔬 FULL DATASET MODE: Processing all {len(lesion_folders)} folders")
+            print("   Will attempt to match all folders with available CSV ground truth")
             print("=" * 50)
         
         results = []
-        format_counter = Counter()
         correct_predictions = 0
         total_with_gt = 0
-        csv_matches_found = 0  # Track how many images actually match CSV entries
+        csv_matches_found = 0
+        total_images_processed = 0
         
-        print("✓ SECTION: Dataset file discovery completed successfully")
-        print(f"Final image count to process: {len(image_files)}")
-        if self.max_images:
+        print("✓ SECTION: Dataset folder discovery completed successfully")
+        print(f"Final folder count to process: {len(lesion_folders)}")
+        if self.max_folders:
             print(f"CSV ground truth entries available: {len(self.ground_truth) if self.ground_truth is not None else 0}")
         print("-"*60)
         
-    # Update progress bar description
-    desc = f"Processing {'Limited' if self.max_images else 'Full'} MILK10k dataset"
-    
-    for idx, img_path in enumerate(tqdm(image_files, desc=desc)):
-        try:
-            # Track file formats
-            ext = img_path.suffix.lower()
-            format_counter[ext] += 1
-            
-            # Load and preprocess image
-            image = self.preprocess_image(img_path)
-            if image is None:
+        # Update progress bar description
+        desc = f"Processing {'Limited' if self.max_folders else 'Full'} MILK10k folders"
+        
+        for folder_idx, folder_path in enumerate(tqdm(lesion_folders, desc=desc)):
+            try:
+                # Process the entire folder
+                folder_result = self.process_folder(folder_path)
+                
+                if folder_result is None:
+                    continue
+                
+                # Update counters
+                total_images_processed += folder_result['num_images']
+                
+                # Track CSV matching statistics
+                if folder_result['csv_match_found']:
+                    csv_matches_found += 1
+                    total_with_gt += 1
+                    
+                    if folder_result['is_correct']:
+                        correct_predictions += 1
+                
+                # Add folder index for tracking
+                folder_result['folder_index'] = folder_idx
+                folder_result['processing_mode'] = 'limited' if self.max_folders else 'full'
+                folder_result['max_folders_setting'] = self.max_folders
+                folder_result['device_used'] = self.device
+                folder_result['cache_used'] = self.cache_path
+                
+                results.append(folder_result)
+                
+                # Progress indicator with CSV matching info
+                lesion_id = folder_result['lesion_id']
+                prediction = folder_result['folder_prediction']['predicted_disease']
+                confidence = folder_result['folder_prediction']['prediction_confidence']
+                
+                status = "✓" if folder_result['is_correct'] else ("✗" if folder_result['ground_truth'] else "-")
+                csv_status = "CSV✓" if folder_result['csv_match_found'] else "CSV✗"
+                print(f"{status} {csv_status} [{folder_idx+1:3d}] {lesion_id}: {prediction} ({confidence:.2%}) [{folder_result['num_images']} imgs]")
+                
+            except Exception as e:
+                print(f"Error processing folder {folder_path}: {e}")
                 continue
-            
-            # Segment image
-            mask, seg_confidence = self.segment_image(image)
-            
-            # Create segmented outputs for ConceptCLIP
-            segmented_outputs = self.create_segmented_outputs(image, mask)
-            
-            # Save segmented outputs for ConceptCLIP input
-            img_name = img_path.stem
-            conceptclip_dir = self.output_path / "segmented_for_conceptclip" / img_name
-            conceptclip_dir.mkdir(exist_ok=True, parents=True)  # Added parents=True
-            
-            for output_type, seg_image in segmented_outputs.items():
-                if seg_image is not None:
-                    output_path = conceptclip_dir / f"{output_type}.png"
-                    cv2.imwrite(str(output_path), cv2.cvtColor(seg_image, cv2.COLOR_RGB2BGR))
-            
-            # Classify using ConceptCLIP
-            classification_probs = self.classify_segmented_image(segmented_outputs)
-            
-            # Get ground truth
-            ground_truth = self.get_ground_truth_label(img_path)
-            
-            # Track CSV matching statistics
-            if ground_truth:
-                csv_matches_found += 1
-            
-            # Get prediction
-            if classification_probs:
-                predicted_disease = max(classification_probs, key=classification_probs.get)
-                prediction_confidence = classification_probs[predicted_disease]
-            else:
-                predicted_disease = "unknown"
-                prediction_confidence = 0.0
-            
-            # Check accuracy ONLY if ground truth available
-            if ground_truth:
-                total_with_gt += 1
-                if ground_truth == predicted_disease:
-                    correct_predictions += 1
-            
-            # Save results
-            result = {
-                'image_path': str(img_path),
-                'image_name': img_name,
-                'image_index': idx,  # Track processing order
-                'predicted_disease': predicted_disease,
-                'prediction_confidence': prediction_confidence,
-                'segmentation_confidence': seg_confidence,
-                'ground_truth': ground_truth,
-                'correct': ground_truth == predicted_disease if ground_truth else None,
-                'csv_match_found': ground_truth is not None,  # Track CSV matching
-                'segmented_outputs_dir': str(conceptclip_dir),
-                'classification_probabilities': classification_probs,
-                'device_used': self.device,
-                'cache_used': self.cache_path,
-                'processing_mode': 'limited' if self.max_images else 'full',
-                'max_images_setting': self.max_images
+        
+        print("✓ SECTION: Folder processing loop completed successfully")
+        print(f"Processed {len(results)} folders successfully")
+        print(f"Total images processed: {total_images_processed}")
+        print(f"Found CSV ground truth for {csv_matches_found} folders")
+        print(f"Accuracy calculated on {total_with_gt} folders with valid CSV ground truth")
+        print("-"*60)
+        
+        # Calculate accuracy ONLY on folders that matched the CSV data
+        accuracy = correct_predictions / total_with_gt if total_with_gt > 0 else 0
+        
+        # Generate comprehensive report
+        report = self._generate_folder_based_report(results, accuracy, total_with_gt, total_images_processed)
+        
+        # Add processing mode info to report
+        if self.max_folders:
+            report['processing_mode'] = {
+                'type': 'limited',
+                'folders_limit': self.max_folders,
+                'folders_processed': len(results),
+                'total_images_processed': total_images_processed,
+                'csv_entries_available': len(self.ground_truth) if self.ground_truth is not None else 0,
+                'csv_matches_found': csv_matches_found,
+                'accuracy_based_on': total_with_gt
             }
-            
-            results.append(result)
-            
-            # Progress indicator with CSV matching info
-            status = "✓" if result['correct'] else ("✗" if ground_truth else "-")
-            csv_status = "CSV✓" if ground_truth else "CSV✗"
-            print(f"{status} {csv_status} [{idx+1:3d}] {img_name}: {predicted_disease} ({prediction_confidence:.2%})")
-            
-        except Exception as e:
-            print(f"Error processing {img_path}: {e}")
-            continue
+        else:
+            report['processing_mode'] = {
+                'type': 'full',
+                'folders_processed': len(results),
+                'total_images_processed': total_images_processed,
+                'csv_matches_found': csv_matches_found,
+                'accuracy_based_on': total_with_gt
+            }
+        
+        print("✓ SECTION: Report generation completed successfully")
+        print("-"*60)
+        
+        # Save results
+        self._save_folder_results(results, report)
+        
+        print("✓ SECTION: Results saving completed successfully")
+        print("-"*60)
+        
+        return report
     
-    print("✓ SECTION: Image processing loop completed successfully")
-    print(f"Processed {len(results)} images successfully")
-    print(f"Found CSV ground truth for {csv_matches_found} images")
-    print(f"Accuracy calculated on {total_with_gt} images with valid CSV ground truth")
-    print("-"*60)
-    
-    # Calculate accuracy ONLY on images that matched the CSV data
-    accuracy = correct_predictions / total_with_gt if total_with_gt > 0 else 0
-    
-    # Generate report with CSV matching statistics
-    report = self._generate_comprehensive_report(results, format_counter, accuracy, total_with_gt)
-    
-    # Add processing mode info to report with CSV coordination details
-    if self.max_images:
-        report['processing_mode'] = {
-            'type': 'limited',
-            'images_limit': self.max_images,
-            'images_processed': len(results),
-            'csv_entries_used': len(self.ground_truth) if self.ground_truth is not None else 0,
-            'csv_matches_found': csv_matches_found,
-            'accuracy_based_on': total_with_gt,
-            'csv_coordination': 'first_n_entries_only'
-        }
-    else:
-        report['processing_mode'] = {
-            'type': 'full',
-            'images_processed': len(results),
-            'csv_matches_found': csv_matches_found,
-            'accuracy_based_on': total_with_gt,
-            'csv_coordination': 'all_available_entries'
-        }
-    
-    print("✓ SECTION: Report generation completed successfully")
-    print("-"*60)
-    
-    # Save results
-    self._save_results(results, report)
-    
-    print("✓ SECTION: Results saving completed successfully")
-    print("-"*60)
-    
-    return report
-    
-    def _generate_comprehensive_report(self, results: List[Dict], format_counter: Counter, 
-                                     accuracy: float, total_with_gt: int) -> Dict:
-        """Generate comprehensive processing report"""
-        print("Generating comprehensive report...")
+    def _generate_folder_based_report(self, results: List[Dict], accuracy: float, 
+                                    total_with_gt: int, total_images: int) -> Dict:
+        """Generate comprehensive processing report for folder-based processing"""
+        print("Generating comprehensive folder-based report...")
         
         # Basic statistics
-        total_processed = len(results)
-        successful_segmentations = sum(1 for r in results if r['segmentation_confidence'] > 0.5)
-        successful_classifications = sum(1 for r in results if r['prediction_confidence'] > 0.1)
+        total_folders = len(results)
+        successful_folders = sum(1 for r in results if r['folder_prediction']['prediction_confidence'] > 0.1)
         
-        # Prediction distribution
-        predictions = [r['predicted_disease'] for r in results]
-        prediction_counts = Counter(predictions)
+        # Images per folder statistics
+        images_per_folder = [r['num_images'] for r in results]
         
-        # Confidence statistics
-        seg_confidences = [r['segmentation_confidence'] for r in results]
-        pred_confidences = [r['prediction_confidence'] for r in results]
+        # Folder prediction distribution
+        folder_predictions = [r['folder_prediction']['predicted_disease'] for r in results]
+        prediction_counts = Counter(folder_predictions)
+        
+        # Confidence statistics for folders
+        folder_confidences = [r['folder_prediction']['prediction_confidence'] for r in results]
+        
+        # Individual image statistics
+        all_individual_results = []
+        for folder_result in results:
+            all_individual_results.extend(folder_result['individual_images'])
+        
+        individual_confidences = [r['prediction_confidence'] for r in all_individual_results]
+        individual_predictions = [r['predicted_disease'] for r in all_individual_results]
+        individual_prediction_counts = Counter(individual_predictions)
         
         # Device statistics
         device_used = results[0]['device_used'] if results else "unknown"
@@ -1152,162 +1047,234 @@ class MILK10kPipeline:
                 'offline_mode': os.environ.get("TRANSFORMERS_OFFLINE", "0") == "1"
             },
             'dataset_info': {
-                'total_images_found': total_processed,
-                'file_formats': dict(format_counter),
-                'total_with_ground_truth': total_with_gt
+                'total_folders_processed': total_folders,
+                'total_images_processed': total_images,
+                'folders_with_ground_truth': total_with_gt,
+                'images_per_folder_stats': {
+                    'mean': np.mean(images_per_folder) if images_per_folder else 0,
+                    'std': np.std(images_per_folder) if images_per_folder else 0,
+                    'min': np.min(images_per_folder) if images_per_folder else 0,
+                    'max': np.max(images_per_folder) if images_per_folder else 0,
+                    'median': np.median(images_per_folder) if images_per_folder else 0
+                }
             },
-            'processing_stats': {
-                'successful_segmentations': successful_segmentations,
-                'successful_classifications': successful_classifications,
-                'segmentation_success_rate': successful_segmentations / total_processed if total_processed > 0 else 0,
-                'classification_success_rate': successful_classifications / total_processed if total_processed > 0 else 0
-            },
-            'accuracy_metrics': {
-                'overall_accuracy': accuracy,
-                'correct_predictions': sum(1 for r in results if r['correct']),
-                'total_evaluated': total_with_gt
-            },
-            'predictions': {
-                'distribution': dict(prediction_counts),
-                'most_common': prediction_counts.most_common(5)
-            },
-            'confidence_stats': {
-                'segmentation': {
-                    'mean': np.mean(seg_confidences) if seg_confidences else 0,
-                    'std': np.std(seg_confidences) if seg_confidences else 0,
-                    'min': np.min(seg_confidences) if seg_confidences else 0,
-                    'max': np.max(seg_confidences) if seg_confidences else 0
+            'folder_level_results': {
+                'successful_folders': successful_folders,
+                'success_rate': successful_folders / total_folders if total_folders > 0 else 0,
+                'accuracy_metrics': {
+                    'overall_accuracy': accuracy,
+                    'correct_predictions': sum(1 for r in results if r['is_correct']),
+                    'total_evaluated': total_with_gt
                 },
-                'classification': {
-                    'mean': np.mean(pred_confidences) if pred_confidences else 0,
-                    'std': np.std(pred_confidences) if pred_confidences else 0,
-                    'min': np.min(pred_confidences) if pred_confidences else 0,
-                    'max': np.max(pred_confidences) if pred_confidences else 0
+                'predictions': {
+                    'distribution': dict(prediction_counts),
+                    'most_common': prediction_counts.most_common(5)
+                },
+                'confidence_stats': {
+                    'mean': np.mean(folder_confidences) if folder_confidences else 0,
+                    'std': np.std(folder_confidences) if folder_confidences else 0,
+                    'min': np.min(folder_confidences) if folder_confidences else 0,
+                    'max': np.max(folder_confidences) if folder_confidences else 0
+                }
+            },
+            'image_level_results': {
+                'total_images': len(all_individual_results),
+                'predictions': {
+                    'distribution': dict(individual_prediction_counts),
+                    'most_common': individual_prediction_counts.most_common(5)
+                },
+                'confidence_stats': {
+                    'mean': np.mean(individual_confidences) if individual_confidences else 0,
+                    'std': np.std(individual_confidences) if individual_confidences else 0,
+                    'min': np.min(individual_confidences) if individual_confidences else 0,
+                    'max': np.max(individual_confidences) if individual_confidences else 0
                 }
             }
         }
         
-        print("✓ Report statistics calculated successfully")
+        print("✓ Folder-based report statistics calculated successfully")
         return report
     
-    def _save_results(self, results: List[Dict], report: Dict):
-        """Save results and report"""
-        print("Saving results and generating visualizations...")
+    def _save_folder_results(self, results: List[Dict], report: Dict):
+        """Save results and report for folder-based processing"""
+        print("Saving folder-based results and generating visualizations...")
         
-        # Save detailed results
-        results_df = pd.DataFrame(results)
-        results_path = self.output_path / "reports" / "detailed_results.csv"
-        results_df.to_csv(results_path, index=False)
-        print(f"✓ Detailed results saved to: {results_path}")
+        # Create detailed folder-level results
+        folder_summary = []
+        detailed_image_results = []
+        comparison_results = []  # New: For model vs CSV comparison
         
-        # Save report
+        for folder_result in results:
+            lesion_id = folder_result['lesion_id']
+            
+            # Folder-level summary
+            folder_summary.append({
+                'lesion_id': lesion_id,
+                'num_images': folder_result['num_images'],
+                'model_prediction': folder_result['folder_prediction']['predicted_disease'],
+                'model_confidence': folder_result['folder_prediction']['prediction_confidence'],
+                'ground_truth': folder_result['ground_truth'],
+                'is_correct': folder_result['is_correct'],
+                'csv_match_found': folder_result['csv_match_found'],
+                'majority_vote_prediction': folder_result['folder_prediction'].get('majority_vote_prediction', ''),
+                'aggregation_method': folder_result['folder_prediction'].get('aggregation_method', '')
+            })
+            
+            # Model vs CSV comparison
+            comparison_results.append({
+                'lesion_id': lesion_id,
+                'model_decision': folder_result['folder_prediction']['predicted_disease'],
+                'csv_ground_truth': folder_result['ground_truth'] if folder_result['ground_truth'] else 'NOT_FOUND',
+                'match_status': 'CORRECT' if folder_result['is_correct'] else (
+                    'INCORRECT' if folder_result['ground_truth'] else 'NO_CSV_ENTRY'),
+                'model_confidence': folder_result['folder_prediction']['prediction_confidence'],
+                'num_images_in_folder': folder_result['num_images']
+            })
+            
+            # Individual image results
+            for img_result in folder_result['individual_images']:
+                img_result['folder_ground_truth'] = folder_result['ground_truth']
+                img_result['folder_prediction'] = folder_result['folder_prediction']['predicted_disease']
+                img_result['folder_is_correct'] = folder_result['is_correct']
+                detailed_image_results.append(img_result)
+        
+        # Save folder-level summary
+        folder_df = pd.DataFrame(folder_summary)
+        folder_path = self.output_path / "reports" / "folder_level_results.csv"
+        folder_df.to_csv(folder_path, index=False)
+        print(f"✓ Folder-level results saved to: {folder_path}")
+        
+        # Save detailed image results
+        images_df = pd.DataFrame(detailed_image_results)
+        images_path = self.output_path / "reports" / "detailed_image_results.csv"
+        images_df.to_csv(images_path, index=False)
+        print(f"✓ Detailed image results saved to: {images_path}")
+        
+        # Save model vs CSV comparison
+        comparison_df = pd.DataFrame(comparison_results)
+        comparison_path = self.output_path / "reports" / "model_vs_csv_comparison.csv"
+        comparison_df.to_csv(comparison_path, index=False)
+        print(f"✓ Model vs CSV comparison saved to: {comparison_path}")
+        
+        # Save processing report
         report_path = self.output_path / "reports" / "processing_report.json"
         with open(report_path, 'w') as f:
             json.dump(report, f, indent=2, default=str)
         print(f"✓ Processing report saved to: {report_path}")
         
-        # Generate summary visualization
-        self._create_summary_plots(results_df, report)
+        # Generate summary visualizations
+        self._create_folder_summary_plots(folder_df, comparison_df, report)
         
         print(f"\nResults saved to: {self.output_path}")
         print(f"Segmented outputs for ConceptCLIP: {self.output_path / 'segmented_for_conceptclip'}")
-        print(f"Detailed results: {results_path}")
+        print(f"Folder-level results: {folder_path}")
+        print(f"Image-level results: {images_path}")
+        print(f"Model vs CSV comparison: {comparison_path}")
         print(f"Processing report: {report_path}")
     
-    def _create_summary_plots(self, results_df: pd.DataFrame, report: Dict):
-        """Create summary visualization plots"""
-        print("Creating summary visualization plots...")
+    def _create_folder_summary_plots(self, folder_df: pd.DataFrame, 
+                                   comparison_df: pd.DataFrame, report: Dict):
+        """Create summary visualization plots for folder-based processing"""
+        print("Creating folder-based summary visualization plots...")
         
-        fig, axes = plt.subplots(2, 2, figsize=(15, 12))
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
         
-        # 1. Prediction distribution
-        pred_counts = report['predictions']['distribution']
-        axes[0,0].bar(pred_counts.keys(), pred_counts.values())
-        axes[0,0].set_title('Disease Prediction Distribution')
+        # 1. Folder prediction distribution
+        pred_counts = folder_df['model_prediction'].value_counts()
+        axes[0,0].bar(pred_counts.index, pred_counts.values)
+        axes[0,0].set_title('Folder-Level Disease Prediction Distribution')
         axes[0,0].tick_params(axis='x', rotation=45)
         
-        # 2. Confidence distributions
-        axes[0,1].hist([results_df['segmentation_confidence'], results_df['prediction_confidence']], 
-                      bins=30, alpha=0.7, label=['Segmentation', 'Classification'])
-        axes[0,1].set_title('Confidence Distributions')
-        axes[0,1].legend()
+        # 2. Confidence distribution (folders)
+        axes[0,1].hist(folder_df['model_confidence'], bins=30, alpha=0.7, color='blue')
+        axes[0,1].set_title('Folder-Level Prediction Confidence Distribution')
+        axes[0,1].set_xlabel('Confidence')
+        axes[0,1].set_ylabel('Number of Folders')
         
-        # 3. Accuracy by confidence level
-        if 'ground_truth' in results_df.columns:
-            results_with_gt = results_df.dropna(subset=['ground_truth'])
-            if len(results_with_gt) > 0:
-                conf_bins = np.linspace(0, 1, 11)
-                accuracies = []
-                for i in range(len(conf_bins)-1):
-                    mask = ((results_with_gt['prediction_confidence'] >= conf_bins[i]) & 
-                           (results_with_gt['prediction_confidence'] < conf_bins[i+1]))
-                    if mask.sum() > 0:
-                        acc = results_with_gt[mask]['correct'].mean()
-                        accuracies.append(acc)
-                    else:
-                        accuracies.append(0)
-                
-                axes[1,0].plot(conf_bins[:-1], accuracies, marker='o')
-                axes[1,0].set_title('Accuracy vs Prediction Confidence')
-                axes[1,0].set_xlabel('Prediction Confidence')
-                axes[1,0].set_ylabel('Accuracy')
+        # 3. Images per folder distribution
+        axes[0,2].hist(folder_df['num_images'], bins=20, alpha=0.7, color='green')
+        axes[0,2].set_title('Images per Folder Distribution')
+        axes[0,2].set_xlabel('Number of Images')
+        axes[0,2].set_ylabel('Number of Folders')
         
-        # 4. Processing success rates
+        # 4. Model vs CSV comparison
+        match_counts = comparison_df['match_status'].value_counts()
+        axes[1,0].pie(match_counts.values, labels=match_counts.index, autopct='%1.1f%%')
+        axes[1,0].set_title('Model vs CSV Ground Truth Comparison')
+        
+        # 5. Accuracy by confidence level
+        folders_with_gt = folder_df.dropna(subset=['ground_truth'])
+        if len(folders_with_gt) > 0:
+            conf_bins = np.linspace(0, 1, 11)
+            accuracies = []
+            for i in range(len(conf_bins)-1):
+                mask = ((folders_with_gt['model_confidence'] >= conf_bins[i]) & 
+                       (folders_with_gt['model_confidence'] < conf_bins[i+1]))
+                if mask.sum() > 0:
+                    acc = folders_with_gt[mask]['is_correct'].mean()
+                    accuracies.append(acc)
+                else:
+                    accuracies.append(0)
+            
+            axes[1,1].plot(conf_bins[:-1], accuracies, marker='o')
+            axes[1,1].set_title('Accuracy vs Folder Prediction Confidence')
+            axes[1,1].set_xlabel('Prediction Confidence')
+            axes[1,1].set_ylabel('Accuracy')
+        
+        # 6. Processing success rates
         success_data = [
-            report['processing_stats']['segmentation_success_rate'],
-            report['processing_stats']['classification_success_rate'],
-            report['accuracy_metrics']['overall_accuracy']
+            report['folder_level_results']['success_rate'],
+            report['folder_level_results']['accuracy_metrics']['overall_accuracy']
         ]
-        axes[1,1].bar(['Segmentation', 'Classification', 'Overall Accuracy'], success_data)
-        axes[1,1].set_title('Processing Success Rates')
-        axes[1,1].set_ylim(0, 1)
+        axes[1,2].bar(['Classification Success', 'Overall Accuracy'], success_data)
+        axes[1,2].set_title('Processing Success Rates')
+        axes[1,2].set_ylim(0, 1)
         
         plt.tight_layout()
-        plot_path = self.output_path / "visualizations" / "summary_plots.png"
+        plot_path = self.output_path / "visualizations" / "folder_summary_plots.png"
         plt.savefig(plot_path, dpi=300, bbox_inches='tight')
         plt.close()
         
-        print(f"✓ Summary plots saved to: {plot_path}")
+        print(f"✓ Folder-based summary plots saved to: {plot_path}")
 
-print("✓ SECTION: Pipeline class definition completed successfully")
+print("✓ SECTION: Updated Pipeline class definition completed successfully")
 print("-"*60)
 
 # ==================== MAIN EXECUTION ====================
 
 def main():
-    """Main execution function with argument parsing"""
-    print("Starting main execution function...")
+    """Main execution function with argument parsing for folder-based processing"""
+    print("Starting main execution function for folder-based processing...")
     
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='MILK10k Medical Image Processing Pipeline')
-    parser.add_argument('--test', action='store_true', help='Run in test mode (20 images only)')
-    parser.add_argument('--max-images', type=int, default=100, help='Maximum number of images to process (default: 100)')
-    parser.add_argument('--full', action='store_true', help='Process entire dataset (override max-images)')
+    parser = argparse.ArgumentParser(description='MILK10k Medical Image Processing Pipeline - Folder-based')
+    parser.add_argument('--test', action='store_true', help='Run in test mode (20 folders only)')
+    parser.add_argument('--max-folders', type=int, default=100, help='Maximum number of folders to process (default: 100)')
+    parser.add_argument('--full', action='store_true', help='Process entire dataset (override max-folders)')
     args = parser.parse_args()
     
     print("✓ Command line arguments parsed successfully")
     
-    # Determine max_images
+    # Determine max_folders
     if args.full:
-        max_images = None
+        max_folders = None
         print("Processing FULL dataset")
     elif args.test:
-        max_images = 20
-        print(f"TEST mode: Processing {max_images} images")
+        max_folders = 20
+        print(f"TEST mode: Processing {max_folders} folders")
     else:
-        max_images = args.max_images  # Default is 100
-        print(f"Processing {max_images} images")
+        max_folders = args.max_folders  # Default is 100
+        print(f"Processing {max_folders} folders")
     
     print("="*60)
-    print("MILK10K MEDICAL IMAGE PROCESSING PIPELINE")
-    print("Updated with Local Cache Support")
-    if max_images:
-        print(f"🔬 Processing {max_images} images")
+    print("MILK10K FOLDER-BASED MEDICAL IMAGE PROCESSING PIPELINE")
+    print("Updated with Local Cache Support and CSV Comparison")
+    if max_folders:
+        print(f"🔬 Processing {max_folders} folders")
     else:
         print(f"🔬 Processing FULL dataset")
     print("="*60)
     
-    # Rest of the main function remains the same...
     pipeline = MILK10kPipeline(
         dataset_path=DATASET_PATH,
         groundtruth_path=GROUNDTRUTH_PATH,
@@ -1315,44 +1282,36 @@ def main():
         sam2_model_path=SAM2_MODEL_PATH,
         conceptclip_model_path=CONCEPTCLIP_MODEL_PATH,
         cache_path=HUGGINGFACE_CACHE_PATH,
-        max_images=max_images
+        max_folders=max_folders
     )
     
     report = pipeline.process_dataset()
-    # ... rest remains the same
     
     print("✓ SECTION: Dataset processing completed successfully")
     print("-"*60)
     
     # Print summary
     print("\n" + "="*50)
-    if max_images:
-        print(f"MILK10K TEST RUN COMPLETE ({max_images} images)")
+    if max_folders:
+        print(f"MILK10K FOLDER-BASED TEST RUN COMPLETE ({max_folders} folders)")
     else:
-        print("MILK10K PROCESSING COMPLETE")
+        print("MILK10K FOLDER-BASED PROCESSING COMPLETE")
     print("="*50)
     print(f"Device used: {report['system_info']['device_used']}")
     print(f"Cache directory: {report['system_info']['cache_directory']}")
     print(f"Offline mode: {report['system_info']['offline_mode']}")
-    print(f"Total images processed: {report['dataset_info']['total_images_found']}")
-    print(f"Successful segmentations: {report['processing_stats']['successful_segmentations']}")
-    print(f"Successful classifications: {report['processing_stats']['successful_classifications']}")
+    print(f"Total folders processed: {report['dataset_info']['total_folders_processed']}")
+    print(f"Total images processed: {report['dataset_info']['total_images_processed']}")
+    print(f"Average images per folder: {report['dataset_info']['images_per_folder_stats']['mean']:.1f}")
     
-    if report['accuracy_metrics']['total_evaluated'] > 0:
-        print(f"Overall accuracy: {report['accuracy_metrics']['overall_accuracy']:.2%}")
+    if report['folder_level_results']['accuracy_metrics']['total_evaluated'] > 0:
+        print(f"Overall folder-level accuracy: {report['folder_level_results']['accuracy_metrics']['overall_accuracy']:.2%}")
     
-    if 'test_mode' in report:
-        print(f"\n⚠️ TEST MODE RESULTS - Limited to {report['test_mode']['images_limit']} images")
-        print("Run without --test flag to process entire dataset")
-    
-    print(f"\nSegmented outputs for ConceptCLIP saved to:")
-    print(f"{OUTPUT_PATH}/segmented_for_conceptclip/")
-    print("\nEach image has multiple segmented versions:")
-    print("- colored_overlay.png (main input for ConceptCLIP)")
-    print("- contour.png (boundary highlighted)")
-    print("- cropped.png (region of interest)")
-    print("- masked_only.png (segmented region only)")
-    print("- side_by_side.png (comparison view)")
+    print(f"\nKey outputs:")
+    print(f"- Folder-level results: {OUTPUT_PATH}/reports/folder_level_results.csv")
+    print(f"- Model vs CSV comparison: {OUTPUT_PATH}/reports/model_vs_csv_comparison.csv")
+    print(f"- Detailed image results: {OUTPUT_PATH}/reports/detailed_image_results.csv")
+    print(f"- Segmented outputs: {OUTPUT_PATH}/segmented_for_conceptclip/")
     
     print("✓ SECTION: Final summary and output completed successfully")
     print("-"*60)
