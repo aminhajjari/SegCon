@@ -312,6 +312,7 @@ class MedicalDomain:
     label_mappings: Dict[str, str]
     preprocessing_params: Dict
     segmentation_strategy: str
+    class_names: List[str]  # Add this line
 
 MILK10K_DOMAIN = MedicalDomain(
     name="milk10k",
