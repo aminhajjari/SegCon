@@ -719,198 +719,227 @@ class MILK10kPipeline:
         
         return final_probs
     
-    def get_ground_truth_label(self, img_path: Path) -> Optional[str]:
-        """Get ground truth label for image"""
-        if self.ground_truth is None:
-            return None
-        
-        img_name = img_path.stem
-        
-        # Try to find matching row in ground truth
-        matching_rows = self.ground_truth[
-            self.ground_truth.iloc[:, 0].astype(str).str.contains(img_name, na=False)
-        ]
-        
-        if len(matching_rows) > 0:
-            row = matching_rows.iloc[0]
-            # Look for the label in subsequent columns
-            for col in self.ground_truth.columns[1:]:
-                if col in self.domain.label_mappings and row[col] == 1:
-                    return self.domain.label_mappings[col]
-            
-            # If no specific column, check if there's a direct label column
-            if 'label' in row:
-                return str(row['label'])
-        
+   def get_ground_truth_label(self, img_path: Path) -> Optional[str]:
+    """Get ground truth label for image"""
+    if self.ground_truth is None:
         return None
     
-    def process_dataset(self) -> Dict:
-        """Process entire MILK10k dataset or limited subset for testing"""
-        print("Starting MILK10k dataset processing...")
+    img_name = img_path.stem
+    
+    # Remove any file extensions that might be in the stem
+    img_name = img_name.split('.')[0]
+    
+    # Handle different naming patterns
+    # Your CSV uses IL_XXXXXXX format
+    if not img_name.startswith('IL_'):
+        # If image is named like "9980498.jpg", convert to "IL_9980498"
+        img_name = f'IL_{img_name}'
+    
+    # Try exact match first
+    matching_rows = self.ground_truth[
+        self.ground_truth['lesion_id'] == img_name
+    ]
+    
+    # If no exact match, try without underscore (IL9980498 vs IL_9980498)
+    if len(matching_rows) == 0:
+        alt_name = img_name.replace('_', '')
+        matching_rows = self.ground_truth[
+            self.ground_truth['lesion_id'].str.replace('_', '') == alt_name
+        ]
+    
+    if len(matching_rows) > 0:
+        row = matching_rows.iloc[0]
         
-        # Find all images
-        image_files = []
-        for ext in self.domain.image_extensions:
-            image_files.extend(self.dataset_path.rglob(f"*{ext}"))
+        # Check each disease column
+        disease_columns = ['AKIEC', 'BCC', 'BEN_OTH', 'BKL', 'DF', 'INF', 
+                          'MAL_OTH', 'MEL', 'NV', 'SCCKA', 'VASC']
         
-        print(f"Found {len(image_files)} total images in dataset")
+        for col in disease_columns:
+            if col in self.ground_truth.columns:
+                # Handle both 1.0 and 1 values
+                if float(row[col]) == 1.0:
+                    return self.domain.label_mappings[col]
+    
+    return None
+    
+   def process_dataset(self) -> Dict:
+    """Process entire MILK10k dataset or limited subset for testing"""
+    print("Starting MILK10k dataset processing...")
+    
+    # Find all images
+    image_files = []
+    for ext in self.domain.image_extensions:
+        image_files.extend(self.dataset_path.rglob(f"*{ext}"))
+    
+    print(f"Found {len(image_files)} total images in dataset")
+    
+    # Sort for consistent order
+    image_files = sorted(image_files)
+    
+    # Debug: Show first few image names and corresponding CSV entries
+    if self.ground_truth is not None:
+        print("\n📊 Verifying image-CSV matching:")
+        print("First 5 image files found:")
+        for i, img in enumerate(image_files[:5]):
+            print(f"  {i+1}. {img.name}")
         
-        # Sort image files for consistent processing order
-        image_files = sorted(image_files)
-        
-        # Limit images if max_images is set (for efficient processing)
-        # This ensures we only process images that correspond to the first N CSV entries
-        if self.max_images:
-            original_count = len(image_files)
-            image_files = image_files[:self.max_images]
-            print(f"📊 EFFICIENT MODE: Processing first {len(image_files)} images out of {original_count} total")
-            print(f"   This corresponds to the first {self.max_images} entries in the CSV ground truth")
-            print("   Ensures 1:1 correspondence between processed images and CSV data")
-            print("   Use --full flag to process the entire dataset")
-            print("=" * 50)
-        else:
-            print(f"🔬 FULL DATASET MODE: Processing all {len(image_files)} images")
-            print("   Will attempt to match all images with available CSV ground truth")
-            print("=" * 50)
-        
-        results = []
-        format_counter = Counter()
-        correct_predictions = 0
-        total_with_gt = 0
-        csv_matches_found = 0  # Track how many images actually match CSV entries
-        
-        print("✓ SECTION: Dataset file discovery completed successfully")
-        print(f"Final image count to process: {len(image_files)}")
-        if self.max_images:
-            print(f"CSV ground truth entries available: {len(self.ground_truth) if self.ground_truth is not None else 0}")
-        print("-"*60)
-        
-        # Update progress bar description
-        desc = f"Processing {'Limited' if self.max_images else 'Full'} MILK10k dataset"
-        
-        for idx, img_path in enumerate(tqdm(image_files, desc=desc)):
-            try:
-                # Track file formats
-                ext = img_path.suffix.lower()
-                format_counter[ext] += 1
-                
-                # Load and preprocess image
-                image = self.preprocess_image(img_path)
-                if image is None:
-                    continue
-                
-                # Segment image
-                mask, seg_confidence = self.segment_image(image)
-                
-                # Create segmented outputs for ConceptCLIP
-                segmented_outputs = self.create_segmented_outputs(image, mask)
-                
-                # Save segmented outputs for ConceptCLIP input
-                img_name = img_path.stem
-                conceptclip_dir = self.output_path / "segmented_for_conceptclip" / img_name
-                conceptclip_dir.mkdir(exist_ok=True)
-                
-                for output_type, seg_image in segmented_outputs.items():
-                    if seg_image is not None:
-                        output_path = conceptclip_dir / f"{output_type}.png"
-                        cv2.imwrite(str(output_path), cv2.cvtColor(seg_image, cv2.COLOR_RGB2BGR))
-                
-                # Classify using ConceptCLIP
-                classification_probs = self.classify_segmented_image(segmented_outputs)
-                
-                # Get ground truth - ONLY from the limited CSV data (first 100 entries)
-                ground_truth = self.get_ground_truth_label(img_path)
-                
-                # Track CSV matching statistics
-                if ground_truth:
-                    csv_matches_found += 1
-                
-                # Get prediction
-                if classification_probs:
-                    predicted_disease = max(classification_probs, key=classification_probs.get)
-                    prediction_confidence = classification_probs[predicted_disease]
-                else:
-                    predicted_disease = "unknown"
-                    prediction_confidence = 0.0
-                
-                # Check accuracy ONLY if ground truth available from limited CSV
-                if ground_truth:
-                    total_with_gt += 1
-                    if ground_truth == predicted_disease:
-                        correct_predictions += 1
-                
-                # Save results
-                result = {
-                    'image_path': str(img_path),
-                    'image_name': img_name,
-                    'image_index': idx,  # Track processing order
-                    'predicted_disease': predicted_disease,
-                    'prediction_confidence': prediction_confidence,
-                    'segmentation_confidence': seg_confidence,
-                    'ground_truth': ground_truth,
-                    'correct': ground_truth == predicted_disease if ground_truth else None,
-                    'csv_match_found': ground_truth is not None,  # Track CSV matching
-                    'segmented_outputs_dir': str(conceptclip_dir),
-                    'classification_probabilities': classification_probs,
-                    'device_used': self.device,
-                    'cache_used': self.cache_path,
-                    'processing_mode': 'limited' if self.max_images else 'full',
-                    'max_images_setting': self.max_images
-                }
-                
-                results.append(result)
-                
-                # Progress indicator with CSV matching info
-                status = "✓" if result['correct'] else ("✗" if ground_truth else "-")
-                csv_status = "CSV✓" if ground_truth else "CSV✗"
-                print(f"{status} {csv_status} [{idx+1:3d}] {img_name}: {predicted_disease} ({prediction_confidence:.2%})")
-                
-            except Exception as e:
-                print(f"Error processing {img_path}: {e}")
+        print("\nFirst 5 CSV lesion_ids:")
+        for i, lesion_id in enumerate(self.ground_truth['lesion_id'].head(5)):
+            print(f"  {i+1}. {lesion_id}")
+        print("-"*50)
+    
+    # Limit images if specified
+    if self.max_images:
+        original_count = len(image_files)
+        image_files = image_files[:self.max_images]
+        print(f"📊 Processing {len(image_files)} images out of {original_count} total")
+        print(f"   This corresponds to the first {self.max_images} entries in the CSV ground truth")
+        print("   Ensures 1:1 correspondence between processed images and CSV data")
+        print("   Use --full flag to process the entire dataset")
+        print("=" * 50)
+    else:
+        print(f"🔬 FULL DATASET MODE: Processing all {len(image_files)} images")
+        print("   Will attempt to match all images with available CSV ground truth")
+        print("=" * 50)
+    
+    results = []
+    format_counter = Counter()
+    correct_predictions = 0
+    total_with_gt = 0
+    csv_matches_found = 0  # Track how many images actually match CSV entries
+    
+    print("✓ SECTION: Dataset file discovery completed successfully")
+    print(f"Final image count to process: {len(image_files)}")
+    if self.max_images:
+        print(f"CSV ground truth entries available: {len(self.ground_truth) if self.ground_truth is not None else 0}")
+    print("-"*60)
+    
+    # Update progress bar description
+    desc = f"Processing {'Limited' if self.max_images else 'Full'} MILK10k dataset"
+    
+    for idx, img_path in enumerate(tqdm(image_files, desc=desc)):
+        try:
+            # Track file formats
+            ext = img_path.suffix.lower()
+            format_counter[ext] += 1
+            
+            # Load and preprocess image
+            image = self.preprocess_image(img_path)
+            if image is None:
                 continue
-        
-        print("✓ SECTION: Image processing loop completed successfully")
-        print(f"Processed {len(results)} images successfully")
-        print(f"Found CSV ground truth for {csv_matches_found} images")
-        print(f"Accuracy calculated on {total_with_gt} images with valid CSV ground truth")
-        print("-"*60)
-        
-        # Calculate accuracy ONLY on images that matched the limited CSV data
-        accuracy = correct_predictions / total_with_gt if total_with_gt > 0 else 0
-        
-        # Generate report with CSV matching statistics
-        report = self._generate_comprehensive_report(results, format_counter, accuracy, total_with_gt)
-        
-        # Add processing mode info to report with CSV coordination details
-        if self.max_images:
-            report['processing_mode'] = {
-                'type': 'limited',
-                'images_limit': self.max_images,
-                'images_processed': len(results),
-                'csv_entries_used': len(self.ground_truth) if self.ground_truth is not None else 0,
-                'csv_matches_found': csv_matches_found,
-                'accuracy_based_on': total_with_gt,
-                'csv_coordination': 'first_n_entries_only'
+            
+            # Segment image
+            mask, seg_confidence = self.segment_image(image)
+            
+            # Create segmented outputs for ConceptCLIP
+            segmented_outputs = self.create_segmented_outputs(image, mask)
+            
+            # Save segmented outputs for ConceptCLIP input
+            img_name = img_path.stem
+            conceptclip_dir = self.output_path / "segmented_for_conceptclip" / img_name
+            conceptclip_dir.mkdir(exist_ok=True, parents=True)  # Added parents=True
+            
+            for output_type, seg_image in segmented_outputs.items():
+                if seg_image is not None:
+                    output_path = conceptclip_dir / f"{output_type}.png"
+                    cv2.imwrite(str(output_path), cv2.cvtColor(seg_image, cv2.COLOR_RGB2BGR))
+            
+            # Classify using ConceptCLIP
+            classification_probs = self.classify_segmented_image(segmented_outputs)
+            
+            # Get ground truth
+            ground_truth = self.get_ground_truth_label(img_path)
+            
+            # Track CSV matching statistics
+            if ground_truth:
+                csv_matches_found += 1
+            
+            # Get prediction
+            if classification_probs:
+                predicted_disease = max(classification_probs, key=classification_probs.get)
+                prediction_confidence = classification_probs[predicted_disease]
+            else:
+                predicted_disease = "unknown"
+                prediction_confidence = 0.0
+            
+            # Check accuracy ONLY if ground truth available
+            if ground_truth:
+                total_with_gt += 1
+                if ground_truth == predicted_disease:
+                    correct_predictions += 1
+            
+            # Save results
+            result = {
+                'image_path': str(img_path),
+                'image_name': img_name,
+                'image_index': idx,  # Track processing order
+                'predicted_disease': predicted_disease,
+                'prediction_confidence': prediction_confidence,
+                'segmentation_confidence': seg_confidence,
+                'ground_truth': ground_truth,
+                'correct': ground_truth == predicted_disease if ground_truth else None,
+                'csv_match_found': ground_truth is not None,  # Track CSV matching
+                'segmented_outputs_dir': str(conceptclip_dir),
+                'classification_probabilities': classification_probs,
+                'device_used': self.device,
+                'cache_used': self.cache_path,
+                'processing_mode': 'limited' if self.max_images else 'full',
+                'max_images_setting': self.max_images
             }
-        else:
-            report['processing_mode'] = {
-                'type': 'full',
-                'images_processed': len(results),
-                'csv_matches_found': csv_matches_found,
-                'accuracy_based_on': total_with_gt,
-                'csv_coordination': 'all_available_entries'
-            }
-        
-        print("✓ SECTION: Report generation completed successfully")
-        print("-"*60)
-        
-        # Save results
-        self._save_results(results, report)
-        
-        print("✓ SECTION: Results saving completed successfully")
-        print("-"*60)
-        
-        return report
+            
+            results.append(result)
+            
+            # Progress indicator with CSV matching info
+            status = "✓" if result['correct'] else ("✗" if ground_truth else "-")
+            csv_status = "CSV✓" if ground_truth else "CSV✗"
+            print(f"{status} {csv_status} [{idx+1:3d}] {img_name}: {predicted_disease} ({prediction_confidence:.2%})")
+            
+        except Exception as e:
+            print(f"Error processing {img_path}: {e}")
+            continue
+    
+    print("✓ SECTION: Image processing loop completed successfully")
+    print(f"Processed {len(results)} images successfully")
+    print(f"Found CSV ground truth for {csv_matches_found} images")
+    print(f"Accuracy calculated on {total_with_gt} images with valid CSV ground truth")
+    print("-"*60)
+    
+    # Calculate accuracy ONLY on images that matched the CSV data
+    accuracy = correct_predictions / total_with_gt if total_with_gt > 0 else 0
+    
+    # Generate report with CSV matching statistics
+    report = self._generate_comprehensive_report(results, format_counter, accuracy, total_with_gt)
+    
+    # Add processing mode info to report with CSV coordination details
+    if self.max_images:
+        report['processing_mode'] = {
+            'type': 'limited',
+            'images_limit': self.max_images,
+            'images_processed': len(results),
+            'csv_entries_used': len(self.ground_truth) if self.ground_truth is not None else 0,
+            'csv_matches_found': csv_matches_found,
+            'accuracy_based_on': total_with_gt,
+            'csv_coordination': 'first_n_entries_only'
+        }
+    else:
+        report['processing_mode'] = {
+            'type': 'full',
+            'images_processed': len(results),
+            'csv_matches_found': csv_matches_found,
+            'accuracy_based_on': total_with_gt,
+            'csv_coordination': 'all_available_entries'
+        }
+    
+    print("✓ SECTION: Report generation completed successfully")
+    print("-"*60)
+    
+    # Save results
+    self._save_results(results, report)
+    
+    print("✓ SECTION: Results saving completed successfully")
+    print("-"*60)
+    
+    return report
     
     def _generate_comprehensive_report(self, results: List[Dict], format_counter: Counter, 
                                      accuracy: float, total_with_gt: int) -> Dict:
@@ -1073,29 +1102,33 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='MILK10k Medical Image Processing Pipeline')
     parser.add_argument('--test', action='store_true', help='Run in test mode (20 images only)')
-    parser.add_argument('--max-images', type=int, default=None, help='Maximum number of images to process')
+    parser.add_argument('--max-images', type=int, default=100, help='Maximum number of images to process (default: 100)')
+    parser.add_argument('--full', action='store_true', help='Process entire dataset (override max-images)')
     args = parser.parse_args()
     
     print("✓ Command line arguments parsed successfully")
     
     # Determine max_images
-    max_images = None
-    if args.test:
+    if args.full:
+        max_images = None
+        print("Processing FULL dataset")
+    elif args.test:
         max_images = 20
-    elif args.max_images:
-        max_images = args.max_images
+        print(f"TEST mode: Processing {max_images} images")
+    else:
+        max_images = args.max_images  # Default is 100
+        print(f"Processing {max_images} images")
     
     print("="*60)
     print("MILK10K MEDICAL IMAGE PROCESSING PIPELINE")
     print("Updated with Local Cache Support")
     if max_images:
-        print(f"🔬 TEST MODE: Processing {max_images} images only")
+        print(f"🔬 Processing {max_images} images")
+    else:
+        print(f"🔬 Processing FULL dataset")
     print("="*60)
     
-    print("✓ SECTION: Main function initialization completed successfully")
-    print("-"*60)
-    
-    # Initialize pipeline with local models and cache
+    # Rest of the main function remains the same...
     pipeline = MILK10kPipeline(
         dataset_path=DATASET_PATH,
         groundtruth_path=GROUNDTRUTH_PATH,
@@ -1106,11 +1139,8 @@ def main():
         max_images=max_images
     )
     
-    print("✓ SECTION: Pipeline object creation completed successfully")
-    print("-"*60)
-    
-    # Process dataset
     report = pipeline.process_dataset()
+    # ... rest remains the same
     
     print("✓ SECTION: Dataset processing completed successfully")
     print("-"*60)
