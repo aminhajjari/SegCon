@@ -169,28 +169,7 @@ def load_local_sam2_model(model_path: str, device: str):
         print("Creating dummy SAM2 predictor for testing...")
         return create_dummy_sam_predictor()
 
-def create_dummy_sam_predictor():
-    """Create a dummy SAM predictor for testing when SAM2 is not available"""
-    class DummySAMPredictor:
-        def set_image(self, image):
-            self.image = image
-            
-        def predict(self, point_coords, point_labels, box=None, multimask_output=True):
-            h, w = self.image.shape[:2]
-            # Create a simple circular mask for testing
-            center_y, center_x = h // 2, w // 2
-            radius = min(h, w) // 4
-            
-            Y, X = np.ogrid[:h, :w]
-            mask = (X - center_x) ** 2 + (Y - center_y) ** 2 <= radius ** 2
-            
-            masks = np.array([mask.astype(np.uint8)])
-            scores = np.array([0.8])
-            logits = None
-            
-            return masks, scores, logits
-    
-    return DummySAMPredictor()
+
 
 print("✓ SECTION: SAM2 model loading functions defined successfully")
 print("-"*60)
