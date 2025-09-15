@@ -1,4 +1,3 @@
-
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -899,7 +898,7 @@ class MILK10kPipeline:
                 lesion_id = folder_result['lesion_id']
                 prediction = folder_result['folder_prediction']['predicted_disease']
                 confidence = folder_result['folder_prediction']['prediction_confidence']
-                status = "✓" if folder_result['is_correct'] else ("_union if folder_result['ground_truth'] else "-")
+                status = "✓" if folder_result['is_correct'] else ("✗" if folder_result['ground_truth'] else "-")
                 csv_status = "CSV✓" if folder_result['csv_match_found'] else "CSV✗"
                 self.logger.info(f"{status} {csv_status} [{folder_idx+1:3d}] {lesion_id}: {prediction} ({confidence:.2%}) [{folder_result['num_images']} imgs]")
             except Exception as e:
