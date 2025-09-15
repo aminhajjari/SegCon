@@ -539,36 +539,32 @@ class MILK10kPipeline:
     
     def segment_image(self, image):
     """
-    Automatic segmentation with SAM2 using a center-point prompt.
+    Automatic SAM2 segmentation with center-point prompt.
     """
     self.segment_model.eval()
 
-    # === Convert image to tensor if not already ===
-    if isinstance(image, np.ndarray):
-        image_tensor = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0).float().to(self.device)
-    else:
-        image_tensor = image.to(self.device)
-
-    # === Create automatic point prompt at image center ===
-    h, w = image_tensor.shape[-2:]
-    center_point = np.array([[w // 2, h // 2]])  # (x, y) format
-    point_labels = np.array([1])  # 1 = positive click
+    # Convert to tensor
+    image_tensor = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0).float().to(self.device)
 
     with torch.no_grad():
+        h, w = image_tensor.shape[-2:]
+        center_point = np.array([[w // 2, h // 2]])
+        point_labels = np.array([1])
+
         outputs = self.segment_model(
             image=image_tensor,
             point_coords=torch.from_numpy(center_point).unsqueeze(0).to(self.device),
             point_labels=torch.from_numpy(point_labels).unsqueeze(0).to(self.device),
-            multimask_output=True  # get multiple candidate masks
+            multimask_output=True
         )
 
-    # === Select the best mask based on IoU prediction ===
-    masks = outputs["masks"]            # [B, num_masks, H, W]
-    scores = outputs["iou_predictions"] # [B, num_masks]
-    best_idx = torch.argmax(scores, dim=1)
-    best_mask = masks[0, best_idx].cpu().numpy().astype(np.uint8)
+        masks = outputs["masks"]
+        scores = outputs["iou_predictions"]
+        best_idx = torch.argmax(scores, dim=1)
+        best_mask = masks[0, best_idx].cpu().numpy().astype(np.uint8)
 
     return best_mask
+
             
         except Exception as e:
             print(f"SAM2 segmentation error: {e}")
