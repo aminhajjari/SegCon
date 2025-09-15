@@ -1,10 +1,6 @@
-# MILK10k Medical Image Segmentation and Classification Pipeline
-# Fixed SAM2 integration for automatic end-to-end processing
-# Updated for folder-based dataset structure with proper SAM2 implementation
-
 import os
 os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1" 
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["BLIS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
@@ -21,8 +17,6 @@ import SimpleITK as sitk
 from collections import Counter, defaultdict
 from PIL import Image
 import json
-import matplotlib.pyplot as plt
-import seaborn as sns
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Union
 from dataclasses import dataclass
@@ -31,26 +25,28 @@ from scipy import ndimage
 import warnings
 import argparse
 import sys
+from fuzzywuzzy import process
 warnings.filterwarnings('ignore')
 
-# Set up Python path for ConceptModel imports
+# Set up Python path for ConceptModel and SAM2 imports
 sys.path.insert(0, '/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input')
+sys.path.insert(0, '/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/segment-anything-2')
 
-# Import local ConceptCLIP modules directly
+# Import local ConceptCLIP and SAM2 modules
 from ConceptModel.modeling_conceptclip import ConceptCLIP
 from ConceptModel.preprocessor_conceptclip import ConceptCLIPProcessor
+from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 print("✓ SECTION: Environment setup and imports completed successfully")
 print("-"*60)
 
 # ==================== CONFIGURATION ====================
 
-# Your dataset paths (Narval specific)
 DATASET_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_Input"
 GROUNDTRUTH_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_GroundTruth.csv"
+MASKS_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_Masks"  # Adjust if needed
 OUTPUT_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegConOutputs"
-
-# Local model paths
 SAM2_MODEL_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/segment-anything-2"
 CONCEPTCLIP_MODEL_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/ConceptModel"
 HUGGINGFACE_CACHE_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/huggingface_cache"
@@ -66,23 +62,17 @@ def setup_gpu_environment():
     print("GPU ENVIRONMENT SETUP")
     print("=" * 50)
     
-    # Check CUDA availability
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA available: {torch.cuda.is_available()}")
     
     if torch.cuda.is_available():
         print(f"CUDA version: {torch.version.cuda}")
         print(f"Number of GPUs: {torch.cuda.device_count()}")
-        
         for i in range(torch.cuda.device_count()):
             gpu_props = torch.cuda.get_device_properties(i)
             print(f"GPU {i}: {gpu_props.name} ({gpu_props.total_memory / 1e9:.1f} GB)")
-        
-        # Set default device
         device = f"cuda:{torch.cuda.current_device()}"
         print(f"Using device: {device}")
-        
-        # Test GPU allocation
         try:
             test_tensor = torch.randn(10, 10).to(device)
             print("✅ GPU allocation test successful")
@@ -90,13 +80,10 @@ def setup_gpu_environment():
             torch.cuda.empty_cache()
         except Exception as e:
             print(f"❌ GPU allocation test failed: {e}")
-            print("Falling back to CPU")
             device = "cpu"
     else:
         print("⚠️ CUDA not available. Using CPU.")
         device = "cpu"
-        
-        # Check Slurm GPU allocation
         slurm_gpus = os.environ.get('SLURM_GPUS_ON_NODE', 'Not set')
         cuda_visible = os.environ.get('CUDA_VISIBLE_DEVICES', 'Not set')
         print(f"SLURM_GPUS_ON_NODE: {slurm_gpus}")
@@ -105,87 +92,26 @@ def setup_gpu_environment():
     print("=" * 50)
     return device
 
-# ==================== FIXED SAM2 MODEL LOADING ====================
+# ==================== SAM2 MODEL LOADING ====================
 
 def load_local_sam2_model(model_path: str, device: str):
     """Load local SAM2 model with proper configuration"""
     try:
         print(f"Loading SAM2 from local path: {model_path}")
-        
-        # Import SAM2 components
-        sys.path.insert(0, model_path)
-        from sam2.build_sam import build_sam2
-        from sam2.sam2_image_predictor import SAM2ImagePredictor
-        
-        # Model configuration - use the correct config file
         model_cfg = os.path.join(model_path, "sam2_configs", "sam2_hiera_l.yaml")
         sam2_checkpoint = os.path.join(model_path, "checkpoints", "sam2_hiera_large.pt")
         
-        # Verify files exist
-        if not os.path.exists(model_cfg):
-            print(f"Config file not found: {model_cfg}")
-            # Try alternative path
-            model_cfg = "sam2_hiera_l.yaml"
+        if not os.path.exists(model_cfg) or not os.path.exists(sam2_checkpoint):
+            print(f"Missing SAM2 files: config={model_cfg}, checkpoint={sam2_checkpoint}")
+            raise FileNotFoundError("SAM2 model files not found")
         
-        if not os.path.exists(sam2_checkpoint):
-            print(f"Checkpoint not found: {sam2_checkpoint}")
-            return create_dummy_sam_predictor()
-        
-        # Build model with proper device handling
-        print(f"Building SAM2 model on device: {device}")
         sam2_model = build_sam2(model_cfg, sam2_checkpoint, device=device)
         predictor = SAM2ImagePredictor(sam2_model)
-        
         print(f"✅ SAM2 loaded successfully on {device}")
         return predictor
-        
     except Exception as e:
         print(f"❌ Error loading local SAM2: {e}")
-        print("Creating dummy SAM2 predictor for testing...")
-        return create_dummy_sam_predictor()
-
-def create_dummy_sam_predictor():
-    """Create a dummy SAM predictor for testing when SAM2 is not available"""
-    class DummySAMPredictor:
-        def set_image(self, image):
-            self.image = image
-            
-        def predict(self, point_coords=None, point_labels=None, box=None, multimask_output=True):
-            h, w = self.image.shape[:2]
-            
-            # Create a more realistic skin lesion-like mask
-            if point_coords is not None and len(point_coords) > 0:
-                # Use the provided point as center
-                center_x, center_y = point_coords[0]
-            else:
-                # Default to center
-                center_y, center_x = h // 2, w // 2
-            
-            # Create an elliptical mask that looks more like a skin lesion
-            Y, X = np.ogrid[:h, :w]
-            
-            # Random ellipse parameters for more realistic lesions
-            a = np.random.randint(min(h, w) // 6, min(h, w) // 3)  # Semi-major axis
-            b = np.random.randint(a // 2, a)  # Semi-minor axis
-            
-            # Elliptical mask
-            ellipse_mask = ((X - center_x) / a) ** 2 + ((Y - center_y) / b) ** 2 <= 1
-            
-            # Add some noise to make it more irregular (like real lesions)
-            noise = np.random.random((h, w)) > 0.1
-            mask = ellipse_mask & noise
-            
-            # Apply morphological operations to smooth
-            mask = morphology.binary_closing(mask, morphology.disk(3))
-            mask = morphology.binary_opening(mask, morphology.disk(2))
-            
-            masks = np.array([mask.astype(np.uint8)])
-            scores = np.array([0.8 + np.random.random() * 0.15])  # Realistic confidence
-            logits = None
-            
-            return masks, scores, logits
-    
-    return DummySAMPredictor()
+        raise RuntimeError("Failed to load SAM2 model")
 
 # ==================== CACHE AND OFFLINE SETUP ====================
 
@@ -195,9 +121,8 @@ def setup_offline_environment(cache_path: str):
     print("OFFLINE ENVIRONMENT SETUP")
     print("=" * 50)
     
-    # Set environment variables for offline mode
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
-    os.environ["HF_DATASETS_OFFLINE"] = "1" 
+    os.environ["HF_DATASETS_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_CACHE"] = cache_path
     os.environ["HF_HOME"] = cache_path
     os.environ["HF_HUB_OFFLINE"] = "1"
@@ -205,7 +130,6 @@ def setup_offline_environment(cache_path: str):
     print(f"✅ Offline mode enabled")
     print(f"✅ Cache directory set to: {cache_path}")
     
-    # Verify cache directory exists
     cache_path_obj = Path(cache_path)
     if cache_path_obj.exists():
         print(f"✅ Cache directory exists")
@@ -215,7 +139,8 @@ def setup_offline_environment(cache_path: str):
             print(f"   - {model.name}")
     else:
         print(f"❌ Cache directory does not exist: {cache_path}")
-        
+        raise FileNotFoundError("Cache directory not found")
+    
     print("=" * 50)
 
 # ==================== CONCEPTCLIP MODEL LOADING ====================
@@ -223,110 +148,30 @@ def setup_offline_environment(cache_path: str):
 def load_local_conceptclip_models(model_path: str, cache_path: str, device: str):
     """Load local ConceptCLIP models with offline support"""
     try:
-        # Setup offline environment first
         setup_offline_environment(cache_path)
-        
         print(f"Loading ConceptCLIP from local path: {model_path}")
-        print(f"Using cache directory: {cache_path}")
-        
-        # Load model with local_files_only to ensure offline mode
         model = ConceptCLIP.from_pretrained(
             model_path,
             local_files_only=True,
             cache_dir=cache_path
         )
-        
-        # Try to load processor from ConceptCLIP
-        try:
-            processor = ConceptCLIPProcessor.from_pretrained(
-                model_path,
-                local_files_only=True,
-                cache_dir=cache_path
-            )
-        except Exception as e:
-            print(f"Using simple processor due to error: {e}")
-            processor = create_simple_processor()
-        
-        # Move to device
+        processor = ConceptCLIPProcessor.from_pretrained(
+            model_path,
+            local_files_only=True,
+            cache_dir=cache_path
+        )
         model = model.to(device)
         model.eval()
-        
         print(f"✅ ConceptCLIP loaded successfully on {device}")
         return model, processor
-        
     except Exception as e:
         print(f"❌ Error loading local ConceptCLIP: {e}")
-        print("This might be due to missing dependencies. Trying fallback...")
-        return create_dummy_conceptclip_model(device), create_simple_processor()
-
-def create_dummy_conceptclip_model(device: str):
-    """Create a dummy ConceptCLIP model for testing"""
-    class DummyConceptCLIP:
-        def __init__(self, device):
-            self.device = device
-            
-        def to(self, device):
-            self.device = device
-            return self
-            
-        def eval(self):
-            return self
-            
-        def __call__(self, **inputs):
-            # Return dummy outputs
-            batch_size = inputs['pixel_values'].shape[0] if 'pixel_values' in inputs else 1
-            text_size = inputs['input_ids'].shape[0] if 'input_ids' in inputs else 10
-            
-            return {
-                'image_features': torch.randn(batch_size, 512).to(self.device),
-                'text_features': torch.randn(text_size, 512).to(self.device),
-                'logit_scale': torch.tensor(2.6592).to(self.device)
-            }
-    
-    return DummyConceptCLIP(device)
-
-def create_simple_processor():
-    """Create a simple processor for ConceptCLIP"""
-    class SimpleProcessor:
-        def __call__(self, images=None, text=None, return_tensors="pt", **kwargs):
-            import torch
-            from PIL import Image
-            import torchvision.transforms as transforms
-            
-            result = {}
-            
-            if images is not None:
-                transform = transforms.Compose([
-                    transforms.Resize((384, 384)),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-                ])
-                
-                if isinstance(images, Image.Image):
-                    images = [images]
-                
-                processed = torch.stack([transform(img) for img in images])
-                result['pixel_values'] = processed
-            
-            if text is not None:
-                # Simple text encoding
-                if isinstance(text, str):
-                    text = [text]
-                
-                # Create dummy tokens for now
-                max_length = 77
-                result['input_ids'] = torch.randint(0, 1000, (len(text), max_length))
-                result['attention_mask'] = torch.ones((len(text), max_length))
-            
-            return result
-    
-    return SimpleProcessor()
+        raise RuntimeError("Failed to load ConceptCLIP model")
 
 # ==================== MILK10k DOMAIN CONFIGURATION ====================
 
 @dataclass
 class MedicalDomain:
-    """Configuration for MILK10k medical imaging domain"""
     name: str
     image_extensions: List[str]
     text_prompts: List[str]
@@ -381,18 +226,16 @@ MILK10K_DOMAIN = MedicalDomain(
     ]
 )
 
-# ==================== FIXED MAIN PIPELINE CLASS ====================
+# ==================== MAIN PIPELINE CLASS ====================
 
 class MILK10kPipeline:
-    """MILK10k segmentation and classification pipeline with fixed SAM2 integration"""
-    
     def __init__(self, dataset_path: str, groundtruth_path: str, output_path: str, 
                  sam2_model_path: str = None, conceptclip_model_path: str = None,
                  cache_path: str = None, max_folders: int = None):
-        print("Initializing MILK10k Pipeline with fixed SAM2 integration...")
-        
+        print("Initializing MILK10k Pipeline...")
         self.dataset_path = Path(dataset_path)
         self.groundtruth_path = groundtruth_path
+        self.masks_path = MASKS_PATH  # Path to ground-truth masks
         self.output_path = Path(output_path)
         self.sam2_model_path = sam2_model_path or SAM2_MODEL_PATH
         self.conceptclip_model_path = conceptclip_model_path or CONCEPTCLIP_MODEL_PATH
@@ -400,7 +243,6 @@ class MILK10kPipeline:
         self.domain = MILK10K_DOMAIN
         self.max_folders = max_folders
         
-        # Create output directories
         self.output_path.mkdir(parents=True, exist_ok=True)
         (self.output_path / "segmented").mkdir(exist_ok=True)
         (self.output_path / "segmented_for_conceptclip").mkdir(exist_ok=True)
@@ -408,142 +250,93 @@ class MILK10kPipeline:
         (self.output_path / "visualizations").mkdir(exist_ok=True)
         (self.output_path / "reports").mkdir(exist_ok=True)
         
-        print("✓ Output directories created successfully")
-        
-        # Initialize device with proper setup
         self.device = setup_gpu_environment()
-        print(f"Initializing MILK10k pipeline on {self.device}")
-        
-        # Load models
         self._load_models()
-        
-        # Load ground truth
         self._load_ground_truth()
-        
         print("✓ SECTION: Pipeline initialization completed successfully")
         print("-"*60)
         
     def _load_models(self):
-        """Load local SAM2 and ConceptCLIP models with device handling"""
         print("Loading models...")
-        
-        # Load local SAM2 with device parameter
         self.sam_predictor = load_local_sam2_model(self.sam2_model_path, self.device)
-        print("✓ SAM2 model loading completed")
-        
-        # Load local ConceptCLIP with cache support
         self.conceptclip_model, self.conceptclip_processor = load_local_conceptclip_models(
             self.conceptclip_model_path, self.cache_path, self.device
         )
-        print("✓ ConceptCLIP model loading completed")
-        
         print("✓ SECTION: Model loading completed successfully")
         print("-"*60)
         
     def _load_ground_truth(self):
-        """Load ground truth annotations"""
         print("Loading ground truth data...")
-        
         if os.path.exists(self.groundtruth_path):
             self.ground_truth = pd.read_csv(self.groundtruth_path)
             print(f"Loaded ground truth: {len(self.ground_truth)} samples")
-            print(f"Ground truth columns: {list(self.ground_truth.columns)}")
+            expected_columns = ['lesion_id'] + list(self.domain.label_mappings.keys())
+            if not all(col in self.ground_truth.columns for col in expected_columns):
+                print(f"Warning: Missing expected columns in CSV. Found: {list(self.ground_truth.columns)}")
             
-            # Create a lookup dictionary for faster access
             self.gt_lookup = {}
             for _, row in self.ground_truth.iterrows():
-                lesion_id = row['lesion_id']
-                
-                # Find which disease column has value 1
-                disease_columns = ['AKIEC', 'BCC', 'BEN_OTH', 'BKL', 'DF', 'INF', 
-                                  'MAL_OTH', 'MEL', 'NV', 'SCCKA', 'VASC']
-                
-                for col in disease_columns:
+                lesion_id = str(row['lesion_id']).strip().lower()
+                for col in self.domain.label_mappings.keys():
                     if col in row and float(row[col]) == 1.0:
                         self.gt_lookup[lesion_id] = self.domain.label_mappings[col]
                         break
-                        
             print(f"✓ Created lookup table for {len(self.gt_lookup)} lesions")
         else:
             print(f"Ground truth file not found: {self.groundtruth_path}")
             self.ground_truth = None
             self.gt_lookup = {}
-            
         print("✓ SECTION: Ground truth loading completed successfully")
         print("-"*60)
     
     def preprocess_image(self, image_path: str) -> Optional[np.ndarray]:
-        """Preprocess images for MILK10k dataset"""
         try:
             image_path = Path(image_path)
             ext = image_path.suffix.lower()
-            
             if ext in ['.dcm', '.dicom']:
                 return self._load_dicom(image_path)
             elif ext in ['.nii', '.nii.gz']:
                 return self._load_nifti(image_path)
             else:
                 return self._load_standard_image(image_path)
-                
         except Exception as e:
             print(f"Error loading {image_path}: {e}")
             return None
     
     def _load_dicom(self, image_path: Path) -> np.ndarray:
-        """Load DICOM images"""
         ds = pydicom.dcmread(image_path)
         image = ds.pixel_array.astype(np.float32)
-        
-        # Normalize
         image = self._normalize_image(image)
-        
-        # Convert to RGB
         if len(image.shape) == 2:
             image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-        
         return image
     
     def _load_nifti(self, image_path: Path) -> np.ndarray:
-        """Load NIfTI images"""
         nii_img = nib.load(image_path)
         image = nii_img.get_fdata()
-        
-        # Take middle slice for 3D volumes
         if len(image.shape) == 3:
             mid_slice = image.shape[2] // 2
             image = image[:, :, mid_slice]
-        
-        # Normalize
         image = self._normalize_image(image)
-        
-        # Convert to RGB
         if len(image.shape) == 2:
             image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-        
         return image
     
     def _load_standard_image(self, image_path: Path) -> np.ndarray:
-        """Load standard image formats"""
         image = cv2.imread(str(image_path))
         if image is None:
             raise ValueError(f"Cannot load image: {image_path}")
-        
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        
-        # Enhance contrast
         if self.domain.preprocessing_params.get('enhance_contrast', False):
             image = self._enhance_contrast(image)
-        
         return image
     
     def _normalize_image(self, image: np.ndarray) -> np.ndarray:
-        """Normalize image to 0-255 range"""
         image = image.astype(np.float32)
         image = (image - image.min()) / (image.max() - image.min() + 1e-5)
         return (image * 255).astype(np.uint8)
     
     def _enhance_contrast(self, image: np.ndarray) -> np.ndarray:
-        """Enhance image contrast using CLAHE"""
         if len(image.shape) == 3:
             lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -554,477 +347,341 @@ class MILK10kPipeline:
             return clahe.apply(image)
     
     def _find_automatic_prompts(self, image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        FIXED: Find automatic prompts for SAM2 using multiple strategies
-        suitable for skin lesion segmentation
-        """
         h, w = image.shape[:2]
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if len(image.shape) == 3 else image
+        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV) if len(image.shape) == 3 else None
         
-        # Convert to different color spaces for better lesion detection
-        if len(image.shape) == 3:
-            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-            hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
-        else:
-            gray = image
-            hsv = None
+        weights = {'dark': 0.4, 'color': 0.3, 'adaptive': 0.2, 'edge': 0.1}
+        combined_mask = np.zeros_like(gray, dtype=np.float32)
         
-        # Strategy 1: Dark spots detection (melanomas are often dark)
-        dark_thresh = np.percentile(gray, 30)  # Bottom 30% of pixels
+        # Dark spots
+        dark_thresh = np.percentile(gray, 30)
         dark_regions = gray < dark_thresh
+        combined_mask += weights['dark'] * dark_regions.astype(np.float32)
         
-        # Strategy 2: Color-based detection (brownish/reddish lesions)
-        color_mask = np.ones_like(gray, dtype=bool)
+        # Color-based
         if hsv is not None:
-            # Detect brown/red hues typical of skin lesions
             hue = hsv[:, :, 0]
-            brown_mask = (hue < 30) | (hue > 150)  # Brown/red range in HSV
-            color_mask = brown_mask
+            brown_mask = (hue < 30) | (hue > 150)
+            combined_mask += weights['color'] * brown_mask.astype(np.float32)
         
-        # Strategy 3: Edge-based detection
-        edges = cv2.Canny(gray, 50, 150)
-        edge_dilated = cv2.dilate(edges, np.ones((5, 5)), iterations=1)
-        
-        # Strategy 4: Adaptive thresholding
+        # Adaptive thresholding
         adaptive_thresh = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2
         )
+        combined_mask += weights['adaptive'] * (adaptive_thresh > 0).astype(np.float32)
         
-        # Combine strategies
-        combined_mask = (dark_regions & color_mask) | (adaptive_thresh > 0)
+        # Edge-based
+        edges = cv2.Canny(gray, 50, 150)
+        edge_dilated = cv2.dilate(edges, np.ones((5, 5)), iterations=1)
+        combined_mask += weights['edge'] * (edge_dilated > 0).astype(np.float32)
         
-        # Clean up the mask
+        # Threshold combined mask
+        combined_mask = (combined_mask > 0.3).astype(np.uint8)
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-        combined_mask = cv2.morphologyEx(combined_mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
         combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
         
-        # Find connected components
         labeled = measure.label(combined_mask)
         regions = measure.regionprops(labeled)
-        
-        # Filter regions by size and shape (lesions are usually compact)
-        valid_regions = []
-        min_area = (h * w) * 0.001  # At least 0.1% of image
-        max_area = (h * w) * 0.3    # At most 30% of image
-        
-        for region in regions:
-            if min_area < region.area < max_area:
-                # Check if region is roughly circular (lesions tend to be round/oval)
-                eccentricity = region.eccentricity if hasattr(region, 'eccentricity') else 1
-                if eccentricity < 0.9:  # Not too elongated
-                    valid_regions.append(region)
-        
-        # Sort by area and take top candidates
+        min_area = (h * w) * 0.001
+        max_area = (h * w) * 0.3
+        valid_regions = [r for r in regions if min_area < r.area < max_area and r.eccentricity < 0.9]
         valid_regions = sorted(valid_regions, key=lambda x: x.area, reverse=True)[:5]
         
-        # Generate prompt points
         positive_points = []
-        negative_points = []
-        
         if valid_regions:
-            # Positive points: centroids of detected regions
-            for region in valid_regions[:3]:  # Top 3 regions
+            for region in valid_regions:
                 y, x = region.centroid
                 positive_points.append([int(x), int(y)])
         else:
-            # Fallback: grid-based sampling
             for y in [h//3, h//2, 2*h//3]:
                 for x in [w//3, w//2, 2*w//3]:
                     positive_points.append([x, y])
         
-        # Negative points: corners (assuming lesions are not at corners)
-        margin = 20
         negative_points = [
-            [margin, margin],           # Top-left
-            [w-margin, margin],         # Top-right
-            [margin, h-margin],         # Bottom-left
-            [w-margin, h-margin],       # Bottom-right
+            [20, 20], [w-20, 20], [20, h-20], [w-20, h-20]
         ]
         
-        # Combine points and labels
         all_points = positive_points + negative_points
         all_labels = [1] * len(positive_points) + [0] * len(negative_points)
-        
         return np.array(all_points), np.array(all_labels)
     
-    def segment_image(self, image: np.ndarray) -> Tuple[np.ndarray, float]:
-        """
-        FIXED: Segment image using SAM2 with improved automatic prompting
-        """
+    def segment_image(self, image: np.ndarray) -> List[Tuple[np.ndarray, float]]:
         h, w = image.shape[:2]
+        point_coords, point_labels = self._find_automatic_prompts(image)
+        masks_and_scores = []
+        sam2_success = False
         
         try:
-            # Get automatic prompts using improved strategy
-            point_coords, point_labels = self._find_automatic_prompts(image)
-            
-            # SAM2 segmentation with proper error handling
             with torch.inference_mode():
-                # Set the image in SAM2
                 self.sam_predictor.set_image(image)
-                
-                # Predict with multiple strategies and pick the best
-                best_mask = None
-                best_score = 0.0
-                
-                # Strategy 1: Use all detected points
+                # Strategy 1: All points
                 try:
-                    masks, scores, logits = self.sam_predictor.predict(
+                    masks, scores, _ = self.sam_predictor.predict(
                         point_coords=point_coords,
                         point_labels=point_labels,
                         multimask_output=True
                     )
-                    
-                    if len(masks) > 0:
-                        best_idx = int(np.argmax(scores))
-                        if scores[best_idx] > best_score:
-                            best_mask = masks[best_idx]
-                            best_score = scores[best_idx]
-                
+                    for mask, score in zip(masks, scores):
+                        if score > 0.5:
+                            processed_mask = self._post_process_mask(mask, image)
+                            masks_and_scores.append((processed_mask, float(score)))
+                    sam2_success = True
                 except Exception as e:
                     print(f"Strategy 1 failed: {e}")
                 
-                # Strategy 2: Use only positive points (center-focused)
+                # Strategy 2: Positive points only
                 try:
                     positive_only = point_coords[point_labels == 1]
                     if len(positive_only) > 0:
-                        masks, scores, logits = self.sam_predictor.predict(
+                        masks, scores, _ = self.sam_predictor.predict(
                             point_coords=positive_only,
                             point_labels=np.ones(len(positive_only)),
                             multimask_output=True
                         )
-                        
-                        if len(masks) > 0:
-                            best_idx = int(np.argmax(scores))
-                            if scores[best_idx] > best_score:
-                                best_mask = masks[best_idx]
-                                best_score = scores[best_idx]
-                
+                        for mask, score in zip(masks, scores):
+                            if score > 0.5:
+                                processed_mask = self._post_process_mask(mask, image)
+                                masks_and_scores.append((processed_mask, float(score)))
+                        sam2_success = True
                 except Exception as e:
                     print(f"Strategy 2 failed: {e}")
                 
-                # Strategy 3: Single center point (most robust)
+                # Strategy 3: Single center point
                 try:
                     center_point = np.array([[w // 2, h // 2]])
-                    masks, scores, logits = self.sam_predictor.predict(
+                    masks, scores, _ = self.sam_predictor.predict(
                         point_coords=center_point,
                         point_labels=np.array([1]),
                         multimask_output=True
                     )
-                    
-                    if len(masks) > 0:
-                        best_idx = int(np.argmax(scores))
-                        if scores[best_idx] > best_score:
-                            best_mask = masks[best_idx]
-                            best_score = scores[best_idx]
-                
+                    for mask, score in zip(masks, scores):
+                        if score > 0.5:
+                            processed_mask = self._post_process_mask(mask, image)
+                            masks_and_scores.append((processed_mask, float(score)))
+                    sam2_success = True
                 except Exception as e:
                     print(f"Strategy 3 failed: {e}")
-                
-                # Return best result or fallback
-                if best_mask is not None:
-                    # Post-process the mask
-                    processed_mask = self._post_process_mask(best_mask, image)
-                    return processed_mask, float(best_score)
-                else:
-                    print("All SAM2 strategies failed, using fallback segmentation")
-                    return self._fallback_segmentation(image)
-            
         except Exception as e:
             print(f"SAM2 segmentation error: {e}")
-            return self._fallback_segmentation(image)
+        
+        if not masks_and_scores:
+            print("All SAM2 strategies failed, using fallback segmentation")
+            mask, score = self._fallback_segmentation(image)
+            masks_and_scores.append((mask, score))
+        
+        print(f"SAM2 status: {'Success' if sam2_success else 'Failed (used fallback)'}")
+        torch.cuda.empty_cache()
+        return masks_and_scores
     
     def _post_process_mask(self, mask: np.ndarray, image: np.ndarray) -> np.ndarray:
-        """Post-process SAM2 mask to improve quality"""
-        # Convert to uint8 if needed
         if mask.dtype != np.uint8:
             mask = mask.astype(np.uint8)
-        
-        # Remove small noise
         mask = cv2.medianBlur(mask, 5)
-        
-        # Fill holes
         mask_filled = ndimage.binary_fill_holes(mask).astype(np.uint8)
-        
-        # Keep only the largest connected component
         contours, _ = cv2.findContours(mask_filled, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours:
-            # Find largest contour
             largest_contour = max(contours, key=cv2.contourArea)
-            
-            # Create clean mask with only the largest component
             clean_mask = np.zeros_like(mask)
             cv2.fillPoly(clean_mask, [largest_contour], 1)
-            
             return clean_mask
-        
         return mask
     
     def _fallback_segmentation(self, image: np.ndarray) -> Tuple[np.ndarray, float]:
-        """Fallback segmentation using traditional computer vision when SAM2 fails"""
         h, w = image.shape[:2]
-        
         try:
-            # Convert to different color spaces
-            if len(image.shape) == 3:
-                gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-                lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
-                hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
-            else:
-                gray = image
-                lab = None
-                hsv = None
+            gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if len(image.shape) == 3 else image
+            hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV) if len(image.shape) == 3 else None
             
-            # Multiple thresholding approaches
             masks = []
-            
-            # 1. Otsu thresholding
             thresh_otsu = filters.threshold_otsu(gray)
-            mask_otsu = gray < thresh_otsu  # Dark lesions
+            mask_otsu = gray < thresh_otsu
             masks.append(mask_otsu)
             
-            # 2. Adaptive thresholding
             adaptive = cv2.adaptiveThreshold(
                 gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 2
             )
             masks.append(adaptive > 0)
             
-            # 3. Color-based segmentation (if color image)
             if hsv is not None:
-                # Detect brownish/dark regions
                 lower_brown = np.array([5, 50, 20])
                 upper_brown = np.array([25, 255, 200])
                 brown_mask = cv2.inRange(hsv, lower_brown, upper_brown)
                 masks.append(brown_mask > 0)
             
-            # 4. Watershed segmentation
-            if len(image.shape) == 3:
-                # Create markers
-                sure_bg = cv2.dilate(gray < thresh_otsu, np.ones((3,3)), iterations=3)
-                dist_transform = cv2.distanceTransform((gray < thresh_otsu).astype(np.uint8), cv2.DIST_L2, 5)
-                sure_fg = dist_transform > 0.7 * dist_transform.max()
-                
-                unknown = sure_bg.astype(np.uint8) - sure_fg.astype(np.uint8)
-                markers = measure.label(sure_fg)
-                markers = markers + 1
-                markers[unknown == 1] = 0
-                
-                watershed_result = segmentation.watershed(-dist_transform, markers)
-                watershed_mask = watershed_result > 1
-                masks.append(watershed_mask)
-            
-            # Combine and select best mask
             best_mask = None
             best_score = 0.0
-            
             for mask in masks:
                 if mask is None:
                     continue
-                    
-                # Clean up mask
                 mask_clean = morphology.binary_closing(mask, morphology.disk(3))
                 mask_clean = morphology.binary_opening(mask_clean, morphology.disk(2))
-                
-                # Score based on size and shape
                 mask_area = mask_clean.sum()
                 total_area = mask_clean.size
                 area_ratio = mask_area / total_area
-                
-                # Good lesions are typically 1-20% of image area
                 if 0.01 < area_ratio < 0.2:
-                    # Find largest connected component
                     labeled = measure.label(mask_clean)
                     if labeled.max() > 0:
                         regions = measure.regionprops(labeled)
                         largest_region = max(regions, key=lambda x: x.area)
-                        
-                        # Score based on circularity and size
                         eccentricity = largest_region.eccentricity
                         solidity = largest_region.solidity
-                        
                         score = (1 - eccentricity) * solidity * min(area_ratio * 10, 1)
-                        
                         if score > best_score:
                             best_score = score
-                            # Create mask with only largest component
                             best_mask = (labeled == largest_region.label).astype(np.uint8)
             
             if best_mask is not None:
                 return best_mask, best_score
-            else:
-                # Last resort: simple center region
-                center_y, center_x = h // 2, w // 2
-                radius = min(h, w) // 6
-                Y, X = np.ogrid[:h, :w]
-                center_mask = (X - center_x) ** 2 + (Y - center_y) ** 2 <= radius ** 2
-                return center_mask.astype(np.uint8), 0.3
-                
+            center_y, center_x = h // 2, w // 2
+            radius = min(h, w) // 6
+            Y, X = np.ogrid[:h, :w]
+            center_mask = (X - center_x) ** 2 + (Y - center_y) ** 2 <= radius ** 2
+            return center_mask.astype(np.uint8), 0.3
         except Exception as e:
             print(f"Fallback segmentation failed: {e}")
-            # Ultimate fallback: center circle
             center_y, center_x = h // 2, w // 2
             radius = min(h, w) // 8
             Y, X = np.ogrid[:h, :w]
             circle_mask = (X - center_x) ** 2 + (Y - center_y) ** 2 <= radius ** 2
             return circle_mask.astype(np.uint8), 0.1
     
-    def create_segmented_outputs(self, image: np.ndarray, mask: np.ndarray) -> Dict[str, np.ndarray]:
-        """Create multiple visualization outputs for ConceptCLIP input"""
-        outputs = {}
+    def evaluate_segmentation(self, predicted_mask: np.ndarray, ground_truth_mask: np.ndarray) -> Dict:
+        """Compute Dice and IoU for segmentation evaluation."""
+        intersection = np.logical_and(predicted_mask, ground_truth_mask).sum()
+        union = np.logical_or(predicted_mask, ground_truth_mask).sum()
+        dice = 2 * intersection / (predicted_mask.sum() + ground_truth_mask.sum() + 1e-5)
+        iou = intersection / (union + 1e-5)
+        return {'dice': float(dice), 'iou': float(iou)}
+    
+    def create_segmented_outputs(self, image: np.ndarray, masks_and_scores: List[Tuple[np.ndarray, float]]) -> Dict[str, List[np.ndarray]]:
+        outputs = defaultdict(list)
         h, w = image.shape[:2]
         
-        # Ensure mask is binary
-        if mask.max() > 1:
-            mask = (mask > 0).astype(np.uint8)
-        
-        # 1. Colored overlay (main output for medical visualization)
-        overlay_color = (255, 100, 100)  # Red for medical visualization
-        alpha = 0.4
-        
-        overlay = image.copy()
-        colored_mask = np.zeros_like(image)
-        colored_mask[mask == 1] = overlay_color
-        
-        colored_overlay = cv2.addWeighted(image, 1-alpha, colored_mask, alpha, 0)
-        outputs['colored_overlay'] = colored_overlay
-        
-        # 2. Contour highlighting with thicker lines
-        contour_image = image.copy()
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(contour_image, contours, -1, (0, 255, 0), 3)  # Thicker green contour
-        outputs['contour'] = contour_image
-        
-        # 3. Cropped region with context
-        coords = np.where(mask == 1)
-        if len(coords[0]) > 0:
-            y_min, y_max = coords[0].min(), coords[0].max()
-            x_min, x_max = coords[1].min(), coords[1].max()
+        for mask_idx, (mask, score) in enumerate(masks_and_scores):
+            if mask.max() > 1:
+                mask = (mask > 0).astype(np.uint8)
             
-            # Add padding (20% of lesion size)
-            lesion_h, lesion_w = y_max - y_min, x_max - x_min
-            padding_y = max(20, int(lesion_h * 0.2))
-            padding_x = max(20, int(lesion_w * 0.2))
+            # Colored overlay
+            overlay_color = (255, 100, 100)
+            alpha = 0.4
+            overlay = image.copy()
+            colored_mask = np.zeros_like(image)
+            colored_mask[mask == 1] = overlay_color
+            colored_overlay = cv2.addWeighted(image, 1-alpha, colored_mask, alpha, 0)
+            outputs['colored_overlay'].append(colored_overlay)
             
-            y_min = max(0, y_min - padding_y)
-            y_max = min(h, y_max + padding_y)
-            x_min = max(0, x_min - padding_x)
-            x_max = min(w, x_max + padding_x)
+            # Contour
+            contour_image = image.copy()
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(contour_image, contours, -1, (0, 255, 0), 3)
+            outputs['contour'].append(contour_image)
             
-            cropped = colored_overlay[y_min:y_max, x_min:x_max]
-            if cropped.size > 0:
-                outputs['cropped'] = cropped
-        
-        # 4. Segmented region only (black background)
-        masked_only = np.zeros_like(image)
-        masked_only[mask == 1] = image[mask == 1]
-        outputs['masked_only'] = masked_only
-        
-        # 5. Side-by-side comparison
-        comparison = np.hstack([image, colored_overlay])
-        outputs['side_by_side'] = comparison
-        
-        # 6. Enhanced contrast version of segmented region
-        if 'cropped' in outputs:
-            try:
-                cropped_enhanced = self._enhance_contrast(outputs['cropped'])
-                outputs['cropped_enhanced'] = cropped_enhanced
-            except:
-                pass
+            # Cropped region
+            coords = np.where(mask == 1)
+            if len(coords[0]) > 0:
+                y_min, y_max = coords[0].min(), coords[0].max()
+                x_min, x_max = coords[1].min(), coords[1].max()
+                lesion_h, lesion_w = y_max - y_min, x_max - x_min
+                padding_y = max(20, int(lesion_h * 0.2))
+                padding_x = max(20, int(lesion_w * 0.2))
+                y_min = max(0, y_min - padding_y)
+                y_max = min(h, y_max + padding_y)
+                x_min = max(0, x_min - padding_x)
+                x_max = min(w, x_max + padding_x)
+                cropped = colored_overlay[y_min:y_max, x_min:x_max]
+                if cropped.size > 0:
+                    outputs['cropped'].append(cropped)
+            
+            # Masked only
+            masked_only = np.zeros_like(image)
+            masked_only[mask == 1] = image[mask == 1]
+            outputs['masked_only'].append(masked_only)
+            
+            # Side-by-side
+            comparison = np.hstack([image, colored_overlay])
+            outputs['side_by_side'].append(comparison)
+            
+            # Enhanced cropped
+            if 'cropped' in outputs:
+                try:
+                    cropped_enhanced = self._enhance_contrast(cropped)
+                    outputs['cropped_enhanced'].append(cropped_enhanced)
+                except:
+                    pass
         
         return outputs
     
-    def classify_segmented_image(self, segmented_outputs: Dict[str, np.ndarray]) -> Dict:
-        """Classify using local ConceptCLIP on segmented outputs"""
+    def classify_segmented_image(self, segmented_outputs: Dict[str, List[np.ndarray]]) -> Dict:
         try:
-            results = {}
+            batch_images = []
+            batch_types = []
+            for output_type, seg_images in segmented_outputs.items():
+                for i, seg_image in enumerate(seg_images):
+                    if seg_image is not None and seg_image.size > 0:
+                        if min(seg_image.shape[:2]) < 64:
+                            seg_image = cv2.resize(seg_image, (224, 224))
+                        batch_images.append(Image.fromarray(seg_image.astype(np.uint8)))
+                        batch_types.append(f"{output_type}_{i}")
             
-            # Classify each segmented output type
-            for output_type, seg_image in segmented_outputs.items():
-                if seg_image is not None and seg_image.size > 0:
-                    # Ensure minimum size for ConceptCLIP
-                    if min(seg_image.shape[:2]) < 64:
-                        seg_image = cv2.resize(seg_image, (224, 224))
+            if batch_images:
+                inputs = self.conceptclip_processor(
+                    images=batch_images,
+                    text=self.domain.text_prompts,
+                    return_tensors='pt',
+                    padding=True,
+                    truncation=True
+                )
+                inputs = {k: v.to(self.device) for k, v in inputs.items() if isinstance(v, torch.Tensor)}
+                with torch.no_grad():
+                    outputs = self.conceptclip_model(**inputs)
+                    results = {}
+                    for i, output_type in enumerate(batch_types):
+                        logits = outputs['logit_scale'] * outputs['image_features'][i] @ outputs['text_features'].t()
+                        probs = logits.softmax(dim=-1).cpu().numpy()[0]
+                        disease_names = [prompt.split(' showing ')[-1] for prompt in self.domain.text_prompts]
+                        results[output_type] = {disease_names[j]: float(probs[j]) for j in range(len(disease_names))}
                     
-                    seg_pil = Image.fromarray(seg_image.astype(np.uint8))
-                    
-                    # Use ConceptCLIP processor
-                    inputs = self.conceptclip_processor(
-                        images=seg_pil, 
-                        text=self.domain.text_prompts,
-                        return_tensors='pt',
-                        padding=True,
-                        truncation=True
-                    )
-                    
-                    # Move inputs to device
-                    inputs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v 
-                             for k, v in inputs.items()}
-                    
-                    with torch.no_grad():
-                        outputs = self.conceptclip_model(**inputs)
-                        
-                        # Extract logits using ConceptCLIP output structure
-                        logit_scale = outputs.get("logit_scale", torch.tensor(1.0))
-                        image_features = outputs["image_features"]
-                        text_features = outputs["text_features"]
-                        
-                        # Compute similarity scores
-                        logits = (logit_scale * image_features @ text_features.t()).softmax(dim=-1)[0]
-                    
-                    # Convert to probabilities
-                    disease_names = [prompt.split(' showing ')[-1] for prompt in self.domain.text_prompts]
-                    probabilities = {disease_names[i]: float(logits[i]) for i in range(len(disease_names))}
-                    results[output_type] = probabilities
-            
-            # Ensemble results with updated weights
-            weights = {
-                'colored_overlay': 0.25,
-                'contour': 0.15,
-                'cropped': 0.30,
-                'cropped_enhanced': 0.15,
-                'masked_only': 0.10,
-                'side_by_side': 0.05
-            }
-            
-            final_probs = self._ensemble_predictions(results, weights)
-            return final_probs
-            
+                    weights = {
+                        'colored_overlay': 0.25,
+                        'contour': 0.15,
+                        'cropped': 0.30,
+                        'cropped_enhanced': 0.15,
+                        'masked_only': 0.10,
+                        'side_by_side': 0.05
+                    }
+                    final_probs = self._ensemble_predictions(results, weights)
+                    return final_probs
+            return {}
         except Exception as e:
             print(f"Classification error: {e}")
             return {}
     
     def _ensemble_predictions(self, results: Dict, weights: Dict) -> Dict:
-        """Ensemble multiple prediction strategies with improved weighting"""
         if not results:
             return {}
-        
-        # Get all disease names
         disease_names = list(next(iter(results.values())).keys())
-        
-        # Weighted average with confidence weighting
         final_probs = {}
         for disease in disease_names:
             weighted_sum = 0
             total_weight = 0
-            
             for output_type, probs in results.items():
-                if output_type in weights and disease in probs:
-                    # Weight by both predefined weight and prediction confidence
-                    base_weight = weights[output_type]
-                    confidence_weight = max(probs.values())  # Use max confidence as quality indicator
+                base_type = output_type.split('_')[0]
+                if base_type in weights and disease in probs:
+                    base_weight = weights[base_type]
+                    confidence_weight = max(probs.values())
                     combined_weight = base_weight * (0.5 + 0.5 * confidence_weight)
-                    
                     weighted_sum += combined_weight * probs[disease]
                     total_weight += combined_weight
-            
             final_probs[disease] = weighted_sum / total_weight if total_weight > 0 else 0
-        
         return final_probs
     
     def process_folder(self, folder_path: Path) -> Dict:
-        """Process all images in a single lesion folder"""
+        print(f"Starting processing for folder {folder_path.name}")
         folder_results = []
-        lesion_id = folder_path.name
+        lesion_id = folder_path.name.lower()
         
-        # Find all images in the folder
         image_files = []
         for ext in self.domain.image_extensions:
             image_files.extend(folder_path.glob(f"*{ext}"))
@@ -1035,43 +692,40 @@ class MILK10kPipeline:
         
         print(f"Processing folder {lesion_id} with {len(image_files)} images")
         
-        # Process each image in the folder
         for img_idx, img_path in enumerate(image_files):
             try:
-                # Load and preprocess image
                 image = self.preprocess_image(img_path)
                 if image is None:
                     continue
                 
-                # Segment image with improved SAM2
-                mask, seg_confidence = self.segment_image(image)
+                masks_and_scores = self.segment_image(image)
+                segmented_outputs = self.create_segmented_outputs(image, masks_and_scores)
                 
-                # Create segmented outputs for ConceptCLIP
-                segmented_outputs = self.create_segmented_outputs(image, mask)
-                
-                # Save segmented outputs
                 img_name = img_path.stem
                 conceptclip_dir = self.output_path / "segmented_for_conceptclip" / lesion_id / img_name
                 conceptclip_dir.mkdir(exist_ok=True, parents=True)
                 
-                for output_type, seg_image in segmented_outputs.items():
-                    if seg_image is not None and seg_image.size > 0:
-                        output_path = conceptclip_dir / f"{output_type}.png"
-                        cv2.imwrite(str(output_path), cv2.cvtColor(seg_image, cv2.COLOR_RGB2BGR))
+                for output_type, seg_images in segmented_outputs.items():
+                    for i, seg_image in enumerate(seg_images):
+                        if seg_image is not None and seg_image.size > 0:
+                            output_path = conceptclip_dir / f"{output_type}_{i}.png"
+                            cv2.imwrite(str(output_path), cv2.cvtColor(seg_image, cv2.COLOR_RGB2BGR))
                 
-                # Classify using ConceptCLIP
                 classification_probs = self.classify_segmented_image(segmented_outputs)
+                predicted_disease = max(classification_probs, key=classification_probs.get) if classification_probs else "unknown"
+                prediction_confidence = classification_probs.get(predicted_disease, 0.0)
+                seg_confidence = max(score for _, score in masks_and_scores) if masks_and_scores else 0.0
                 
-                # Get prediction
-                if classification_probs:
-                    predicted_disease = max(classification_probs, key=classification_probs.get)
-                    prediction_confidence = classification_probs[predicted_disease]
-                else:
-                    predicted_disease = "unknown"
-                    prediction_confidence = 0.0
+                # Evaluate segmentation if ground-truth mask exists
+                seg_metrics = {}
+                gt_mask_path = Path(self.masks_path) / lesion_id / f"{img_name}.png"
+                if gt_mask_path.exists():
+                    gt_mask = cv2.imread(str(gt_mask_path), cv2.IMREAD_GRAYSCALE)
+                    if gt_mask is not None:
+                        best_mask = max(masks_and_scores, key=lambda x: x[1])[0] if masks_and_scores else np.zeros_like(image[..., 0])
+                        seg_metrics = self.evaluate_segmentation(best_mask, gt_mask > 0)
                 
-                # Store individual image result
-                image_result = {
+                folder_results.append({
                     'lesion_id': lesion_id,
                     'image_path': str(img_path),
                     'image_name': img_name,
@@ -1079,12 +733,10 @@ class MILK10kPipeline:
                     'predicted_disease': predicted_disease,
                     'prediction_confidence': prediction_confidence,
                     'segmentation_confidence': seg_confidence,
+                    'segmentation_metrics': seg_metrics,
                     'classification_probabilities': classification_probs,
                     'segmented_outputs_dir': str(conceptclip_dir)
-                }
-                
-                folder_results.append(image_result)
-                
+                })
             except Exception as e:
                 print(f"Error processing image {img_path}: {e}")
                 continue
@@ -1092,16 +744,11 @@ class MILK10kPipeline:
         if not folder_results:
             return None
         
-        # Aggregate results for the folder
         folder_prediction = self._aggregate_folder_predictions(folder_results)
-        
-        # Get ground truth for this lesion
-        ground_truth = self.gt_lookup.get(lesion_id, None)
-        
-        # Check if prediction matches ground truth
+        ground_truth = self._get_ground_truth(lesion_id)
         is_correct = ground_truth == folder_prediction['predicted_disease'] if ground_truth else None
         
-        return {
+        result = {
             'lesion_id': lesion_id,
             'num_images': len(folder_results),
             'individual_images': folder_results,
@@ -1110,13 +757,25 @@ class MILK10kPipeline:
             'is_correct': is_correct,
             'csv_match_found': ground_truth is not None
         }
+        print(f"Completed processing for folder {folder_path.name}")
+        torch.cuda.empty_cache()
+        return result
+    
+    def _get_ground_truth(self, lesion_id: str) -> Optional[str]:
+        lesion_id_lower = lesion_id.lower()
+        if lesion_id_lower in self.gt_lookup:
+            return self.gt_lookup[lesion_id_lower]
+        # Fuzzy matching for close matches
+        if self.gt_lookup:
+            closest_match, score = process.extractOne(lesion_id_lower, self.gt_lookup.keys())
+            if score > 90:  # High confidence match
+                print(f"Fuzzy matched {lesion_id} to {closest_match} (score: {score})")
+                return self.gt_lookup[closest_match]
+        return None
     
     def _aggregate_folder_predictions(self, folder_results: List[Dict]) -> Dict:
-        """Aggregate predictions from multiple images with confidence weighting"""
         if not folder_results:
             return {'predicted_disease': 'unknown', 'prediction_confidence': 0.0}
-        
-        # Strategy: Confidence-weighted average
         all_diseases = self.domain.class_names
         weighted_probs = {disease: 0.0 for disease in all_diseases}
         total_weights = 0.0
@@ -1124,26 +783,18 @@ class MILK10kPipeline:
         for result in folder_results:
             probs = result.get('classification_probabilities', {})
             confidence = result.get('prediction_confidence', 0.0)
-            
-            # Use prediction confidence as weight
-            weight = max(0.1, confidence)  # Minimum weight of 0.1
-            
+            weight = max(0.1, confidence)
             for disease in all_diseases:
                 if disease in probs:
                     weighted_probs[disease] += weight * probs[disease]
-            
             total_weights += weight
         
-        # Normalize weighted probabilities
         if total_weights > 0:
             for disease in weighted_probs:
                 weighted_probs[disease] /= total_weights
         
-        # Get final prediction
         predicted_disease = max(weighted_probs, key=weighted_probs.get)
         prediction_confidence = weighted_probs[predicted_disease]
-        
-        # Alternative: Majority vote for comparison
         predictions = [result['predicted_disease'] for result in folder_results]
         prediction_counts = Counter(predictions)
         majority_prediction = prediction_counts.most_common(1)[0][0]
@@ -1158,37 +809,193 @@ class MILK10kPipeline:
             'total_weight': total_weights
         }
     
+    def _generate_folder_based_report(self, results: List[Dict], accuracy: float, 
+                                    total_with_gt: int, total_images: int) -> Dict:
+        """Generate simplified folder-based report with key metrics."""
+        print("Generating simplified folder-based report...")
+        total_folders = len(results)
+        folder_predictions = [r['folder_prediction']['predicted_disease'] for r in results]
+        prediction_counts = Counter(folder_predictions)
+        
+        # Compute per-class F1-scores and confusion matrix
+        labels = self.domain.class_names
+        confusion_matrix = np.zeros((len(labels), len(labels)), dtype=int)
+        f1_scores = {label: {'tp': 0, 'fp': 0, 'fn': 0} for label in labels}
+        
+        for result in results:
+            pred = result['folder_prediction']['predicted_disease']
+            gt = result['ground_truth']
+            if gt and pred in labels and gt in labels:
+                pred_idx = labels.index(pred)
+                gt_idx = labels.index(gt)
+                confusion_matrix[gt_idx, pred_idx] += 1
+                if pred == gt:
+                    f1_scores[pred]['tp'] += 1
+                else:
+                    f1_scores[pred]['fp'] += 1
+                    f1_scores[gt]['fn'] += 1
+        
+        f1_results = {}
+        for label in labels:
+            tp = f1_scores[label]['tp']
+            fp = f1_scores[label]['fp']
+            fn = f1_scores[label]['fn']
+            precision = tp / (tp + fp + 1e-5)
+            recall = tp / (tp + fn + 1e-5)
+            f1 = 2 * (precision * recall) / (precision + recall + 1e-5)
+            f1_results[label] = float(f1)
+        
+        # Compute segmentation metrics if available
+        segmentation_metrics = []
+        for result in results:
+            for img_result in result['individual_images']:
+                if img_result.get('segmentation_metrics'):
+                    segmentation_metrics.append(img_result['segmentation_metrics'])
+        
+        device_used = results[0]['device_used'] if results else "unknown"
+        
+        report = {
+            'system_info': {
+                'device_used': device_used,
+                'pytorch_version': torch.__version__,
+                'cuda_available': torch.cuda.is_available(),
+                'offline_mode': os.environ.get("TRANSFORMERS_OFFLINE", "0") == "1",
+                'cache_directory': self.cache_path
+            },
+            'dataset_info': {
+                'total_folders_processed': total_folders,
+                'folders_with_ground_truth': total_with_gt,
+                'total_images_processed': total_images
+            },
+            'classification_metrics': {
+                'overall_accuracy': accuracy,
+                'correct_predictions': sum(1 for r in results if r['is_correct']),
+                'total_evaluated': total_with_gt,
+                'per_class_f1': f1_results,
+                'confusion_matrix': confusion_matrix.tolist()
+            },
+            'segmentation_metrics': {
+                'mean_dice': float(np.mean([m['dice'] for m in segmentation_metrics])) if segmentation_metrics else 0.0,
+                'mean_iou': float(np.mean([m['iou'] for m in segmentation_metrics])) if segmentation_metrics else 0.0,
+                'num_evaluated': len(segmentation_metrics)
+            },
+            'predictions': {
+                'distribution': dict(prediction_counts),
+                'most_common': prediction_counts.most_common(5)
+            }
+        }
+        
+        # Generate Chart.js visualization
+        self._create_folder_summary_plots(report)
+        return report
+    
+    def _save_folder_results(self, results: List[Dict], report: Dict):
+        """Save simplified results and comparison CSV."""
+        print("Saving simplified results and generating comparison CSV...")
+        comparison_data = []
+        
+        for folder_result in results:
+            lesion_id = folder_result['lesion_id']
+            model_prediction = folder_result['folder_prediction']['predicted_disease']
+            model_confidence = folder_result['folder_prediction']['prediction_confidence']
+            ground_truth = folder_result['ground_truth']
+            reverse_mapping = {v: k for k, v in self.domain.label_mappings.items()}
+            model_prediction_code = reverse_mapping.get(model_prediction, model_prediction)
+            ground_truth_code = reverse_mapping.get(ground_truth, ground_truth) if ground_truth else None
+            is_correct = (model_prediction == ground_truth) if ground_truth else None
+            
+            comparison_data.append({
+                'lesion_id': lesion_id,
+                'ground_truth_disease': ground_truth if ground_truth else 'NOT_FOUND_IN_CSV',
+                'predicted_disease': model_prediction,
+                'confidence': f"{model_confidence:.4f}",
+                'is_correct': is_correct,
+                'match_status': 'CORRECT' if is_correct else ('WRONG' if ground_truth else 'NO_CSV_ENTRY')
+            })
+        
+        comparison_df = pd.DataFrame(comparison_data)
+        comparison_path = self.output_path / "reports" / "model_vs_groundtruth_comparison.csv"
+        comparison_df.to_csv(comparison_path, index=False)
+        
+        summary_data = {
+            'total_folders_processed': report['dataset_info']['total_folders_processed'],
+            'folders_with_ground_truth': report['dataset_info']['folders_with_ground_truth'],
+            'correct_predictions': report['classification_metrics']['correct_predictions'],
+            'accuracy_percentage': f"{report['classification_metrics']['overall_accuracy'] * 100:.2f}%",
+            'per_class_f1': report['classification_metrics']['per_class_f1'],
+            'confusion_matrix': report['classification_metrics']['confusion_matrix'],
+            'segmentation_metrics': report['segmentation_metrics']
+        }
+        summary_path = self.output_path / "reports" / "accuracy_summary.json"
+        with open(summary_path, 'w') as f:
+            json.dump(summary_data, f, indent=2, default=str)
+        
+        print(f"✓ Model vs Ground Truth comparison saved to: {comparison_path}")
+        print(f"✓ Accuracy summary saved to: {summary_path}")
+    
+    def _create_folder_summary_plots(self, report: Dict):
+        """Create Chart.js JSON config for prediction distribution."""
+        print("Creating Chart.js prediction distribution config...")
+        pred_dist = report['predictions']['distribution']
+        labels = list(pred_dist.keys())
+        values = list(pred_dist.values())
+        colors = ["#FF6384", "#36A2EB", "#FFCE56", "#4BC0C0", "#9966FF", 
+                  "#FF9F40", "#FF6666", "#66CCCC", "#CC99CC", "#99CC99", "#6666FF"]
+        
+        pred_plot = {
+            "type": "bar",
+            "data": {
+                "labels": labels,
+                "datasets": [{
+                    "label": "Folder-Level Predictions",
+                    "data": values,
+                    "backgroundColor": colors[:len(labels)],
+                    "borderColor": colors[:len(labels)],
+                    "borderWidth": 1
+                }]
+            },
+            "options": {
+                "scales": {
+                    "y": {
+                        "beginAtZero": True,
+                        "title": {"display": True, "text": "Number of Folders"}
+                    },
+                    "x": {
+                        "title": {"display": True, "text": "Disease"}
+                    }
+                },
+                "plugins": {
+                    "title": {"display": True, "text": "Folder-Level Disease Prediction Distribution"},
+                    "legend": {"display": False}
+                }
+            }
+        }
+        
+        plot_path = self.output_path / "visualizations" / "prediction_distribution.json"
+        with open(plot_path, 'w') as f:
+            json.dump(pred_plot, f, indent=2)
+        print(f"✓ Chart.js config saved to: {plot_path}")
+    
     def process_dataset(self) -> Dict:
-        """Process entire MILK10k folder-based dataset"""
-        print("Starting MILK10k folder-based dataset processing...")
-        
-        # Find all lesion folders
-        lesion_folders = [f for f in self.dataset_path.iterdir() 
-                         if f.is_dir() and not f.name.startswith('.')]
-        
+        print("Starting MILK10k dataset processing...")
+        lesion_folders = [f for f in self.dataset_path.iterdir() if f.is_dir() and not f.name.startswith('.')]
         print(f"Found {len(lesion_folders)} lesion folders in dataset")
-        
-        # Sort for consistent order
         lesion_folders = sorted(lesion_folders, key=lambda x: x.name)
         
-        # Debug: Show first few folders and corresponding CSV entries
         if self.ground_truth is not None:
             print("\n📊 Verifying folder-CSV matching:")
             print("First 5 lesion folders found:")
             for i, folder in enumerate(lesion_folders[:5]):
                 print(f"  {i+1}. {folder.name}")
-            
             print("\nFirst 5 CSV lesion_ids:")
             for i, lesion_id in enumerate(self.ground_truth['lesion_id'].head(5)):
                 print(f"  {i+1}. {lesion_id}")
             print("-"*50)
         
-        # Limit folders if specified
         if self.max_folders:
             original_count = len(lesion_folders)
             lesion_folders = lesion_folders[:self.max_folders]
             print(f"📊 Processing {len(lesion_folders)} folders out of {original_count} total")
-            print(f"   Limited processing for testing purposes")
         else:
             print(f"🔬 FULL DATASET MODE: Processing all {len(lesion_folders)} folders")
         
@@ -1198,361 +1005,48 @@ class MILK10kPipeline:
         csv_matches_found = 0
         total_images_processed = 0
         
-        # Process folders with progress bar
         desc = f"Processing {'Limited' if self.max_folders else 'Full'} MILK10k folders"
-        
         for folder_idx, folder_path in enumerate(tqdm(lesion_folders, desc=desc)):
             try:
-                # Process the entire folder
                 folder_result = self.process_folder(folder_path)
-                
                 if folder_result is None:
                     continue
-                
-                # Update counters
                 total_images_processed += folder_result['num_images']
-                
-                # Track CSV matching statistics
                 if folder_result['csv_match_found']:
                     csv_matches_found += 1
                     total_with_gt += 1
-                    
                     if folder_result['is_correct']:
                         correct_predictions += 1
-                
-                # Add processing metadata
                 folder_result['folder_index'] = folder_idx
                 folder_result['processing_mode'] = 'limited' if self.max_folders else 'full'
-                folder_result['max_folders_setting'] = self.max_folders
                 folder_result['device_used'] = self.device
-                
                 results.append(folder_result)
                 
-                # Progress indicator
                 lesion_id = folder_result['lesion_id']
                 prediction = folder_result['folder_prediction']['predicted_disease']
                 confidence = folder_result['folder_prediction']['prediction_confidence']
-                
                 status = "✓" if folder_result['is_correct'] else ("✗" if folder_result['ground_truth'] else "-")
                 csv_status = "CSV✓" if folder_result['csv_match_found'] else "CSV✗"
                 print(f"{status} {csv_status} [{folder_idx+1:3d}] {lesion_id}: {prediction} ({confidence:.2%}) [{folder_result['num_images']} imgs]")
-                
             except Exception as e:
                 print(f"Error processing folder {folder_path}: {e}")
                 continue
         
-        # Calculate accuracy and generate report
         accuracy = correct_predictions / total_with_gt if total_with_gt > 0 else 0
         report = self._generate_folder_based_report(results, accuracy, total_with_gt, total_images_processed)
-        
-        # Save results
         self._save_folder_results(results, report)
-        
         return report
-    
-    def _generate_folder_based_report(self, results: List[Dict], accuracy: float, 
-                                    total_with_gt: int, total_images: int) -> Dict:
-        """Generate comprehensive processing report"""
-        print("Generating comprehensive folder-based report...")
-        
-        # Basic statistics
-        total_folders = len(results)
-        successful_folders = sum(1 for r in results if r['folder_prediction']['prediction_confidence'] > 0.1)
-        
-        # Images per folder statistics
-        images_per_folder = [r['num_images'] for r in results]
-        
-        # Folder prediction distribution
-        folder_predictions = [r['folder_prediction']['predicted_disease'] for r in results]
-        prediction_counts = Counter(folder_predictions)
-        
-        # Confidence statistics for folders
-        folder_confidences = [r['folder_prediction']['prediction_confidence'] for r in results]
-        
-        # Individual image statistics
-        all_individual_results = []
-        for folder_result in results:
-            all_individual_results.extend(folder_result['individual_images'])
-        
-        individual_confidences = [r['prediction_confidence'] for r in all_individual_results]
-        individual_predictions = [r['predicted_disease'] for r in all_individual_results]
-        individual_prediction_counts = Counter(individual_predictions)
-        
-        # Device and system info
-        device_used = results[0]['device_used'] if results else "unknown"
-        
-        report = {
-            'system_info': {
-                'device_used': device_used,
-                'pytorch_version': torch.__version__,
-                'cuda_available': torch.cuda.is_available(),
-                'gpu_count': torch.cuda.device_count() if torch.cuda.is_available() else 0,
-                'offline_mode': os.environ.get("TRANSFORMERS_OFFLINE", "0") == "1"
-            },
-            'dataset_info': {
-                'total_folders_processed': total_folders,
-                'total_images_processed': total_images,
-                'folders_with_ground_truth': total_with_gt,
-                'images_per_folder_stats': {
-                    'mean': np.mean(images_per_folder) if images_per_folder else 0,
-                    'std': np.std(images_per_folder) if images_per_folder else 0,
-                    'min': int(np.min(images_per_folder)) if images_per_folder else 0,
-                    'max': int(np.max(images_per_folder)) if images_per_folder else 0,
-                    'median': np.median(images_per_folder) if images_per_folder else 0
-                }
-            },
-            'folder_level_results': {
-                'successful_folders': successful_folders,
-                'success_rate': successful_folders / total_folders if total_folders > 0 else 0,
-                'accuracy_metrics': {
-                    'overall_accuracy': accuracy,
-                    'correct_predictions': sum(1 for r in results if r['is_correct']),
-                    'total_evaluated': total_with_gt
-                },
-                'predictions': {
-                    'distribution': dict(prediction_counts),
-                    'most_common': prediction_counts.most_common(5)
-                },
-                'confidence_stats': {
-                    'mean': float(np.mean(folder_confidences)) if folder_confidences else 0,
-                    'std': float(np.std(folder_confidences)) if folder_confidences else 0,
-                    'min': float(np.min(folder_confidences)) if folder_confidences else 0,
-                    'max': float(np.max(folder_confidences)) if folder_confidences else 0
-                }
-            },
-            'image_level_results': {
-                'total_images': len(all_individual_results),
-                'predictions': {
-                    'distribution': dict(individual_prediction_counts),
-                    'most_common': individual_prediction_counts.most_common(5)
-                },
-                'confidence_stats': {
-                    'mean': float(np.mean(individual_confidences)) if individual_confidences else 0,
-                    'std': float(np.std(individual_confidences)) if individual_confidences else 0,
-                    'min': float(np.min(individual_confidences)) if individual_confidences else 0,
-                    'max': float(np.max(individual_confidences)) if individual_confidences else 0
-                }
-            }
-        }
-        
-    return report
-
-def _save_folder_results(self, results: List[Dict], report: Dict):
-    """Save results with improved comparison format"""
-    print("Saving folder-based results and generating comparison CSV...")
-    
-    # Create the main comparison CSV that matches your requirements
-    comparison_data = []
-    detailed_image_results = []
-    
-    for folder_result in results:
-        lesion_id = folder_result['lesion_id']
-        
-        # Get model prediction
-        model_prediction = folder_result['folder_prediction']['predicted_disease']
-        model_confidence = folder_result['folder_prediction']['prediction_confidence']
-        
-        # Get ground truth from CSV
-        ground_truth = folder_result['ground_truth']
-        
-        # Map disease names back to CSV codes for comparison
-        reverse_mapping = {v: k for k, v in self.domain.label_mappings.items()}
-        model_prediction_code = reverse_mapping.get(model_prediction, model_prediction)
-        ground_truth_code = reverse_mapping.get(ground_truth, ground_truth) if ground_truth else None
-        
-        # Determine correctness
-        is_correct = (model_prediction == ground_truth) if ground_truth else None
-        
-        comparison_data.append({
-            'lesion_id': lesion_id,
-            'ground_truth_disease_name': ground_truth if ground_truth else 'NOT_FOUND_IN_CSV',
-            'ground_truth_code': ground_truth_code if ground_truth_code else 'NOT_FOUND',
-            'model_predicted_disease_name': model_prediction,
-            'model_predicted_code': model_prediction_code,
-            'model_confidence': f"{model_confidence:.4f}",
-            'is_correct': is_correct,
-            'match_status': 'CORRECT' if is_correct else ('WRONG' if ground_truth else 'NO_CSV_ENTRY'),
-            'num_images_in_folder': folder_result['num_images']
-        })
-    
-    # Save the main comparison CSV
-    comparison_df = pd.DataFrame(comparison_data)
-    comparison_path = self.output_path / "reports" / "model_vs_groundtruth_comparison.csv"
-    comparison_df.to_csv(comparison_path, index=False)
-    
-    # Create summary statistics
-    if len(comparison_data) > 0:
-        total_folders = len(comparison_data)
-        folders_with_csv_match = sum(1 for item in comparison_data if item['match_status'] != 'NO_CSV_ENTRY')
-        correct_predictions = sum(1 for item in comparison_data if item['is_correct'] is True)
-        
-        accuracy = correct_predictions / folders_with_csv_match if folders_with_csv_match > 0 else 0
-        
-        # Save summary
-        summary_data = {
-            'total_folders_processed': total_folders,
-            'folders_found_in_csv': folders_with_csv_match,
-            'folders_not_in_csv': total_folders - folders_with_csv_match,
-            'correct_predictions': correct_predictions,
-            'wrong_predictions': folders_with_csv_match - correct_predictions,
-            'accuracy_percentage': f"{accuracy * 100:.2f}%",
-            'model_confidence_avg': np.mean([float(item['model_confidence']) for item in comparison_data])
-        }
-        
-        summary_path = self.output_path / "reports" / "accuracy_summary.json"
-        with open(summary_path, 'w') as f:
-            json.dump(summary_data, f, indent=2, default=str)
-    
-    print(f"✓ Model vs Ground Truth comparison saved to: {comparison_path}")
-    print(f"✓ Accuracy summary saved to: {summary_path}")
-    
-    # Also save detailed results for debugging
-    detailed_results = []
-    for folder_result in results:
-        for img_result in folder_result['individual_images']:
-            detailed_results.append({
-                'lesion_id': img_result['lesion_id'],
-                'image_name': img_result['image_name'],
-                'individual_prediction': img_result['predicted_disease'],
-                'individual_confidence': img_result['prediction_confidence'],
-                'folder_final_prediction': folder_result['folder_prediction']['predicted_disease'],
-                'folder_confidence': folder_result['folder_prediction']['prediction_confidence'],
-                'ground_truth': folder_result['ground_truth'],
-                'folder_is_correct': folder_result['is_correct']
-            })
-    
-    detailed_df = pd.DataFrame(detailed_results)
-    detailed_path = self.output_path / "reports" / "detailed_image_results.csv"
-    detailed_df.to_csv(detailed_path, index=False)
-    
-    print(f"✓ Detailed results saved to: {detailed_path}")
-
-# Also update the main function to ensure 50 folders
-def main():
-    """Main execution function"""
-    parser = argparse.ArgumentParser(description='MILK10k Medical Image Processing Pipeline')
-    parser.add_argument('--max-folders', type=int, default=50, help='Maximum number of folders to process (default: 50)')
-    parser.add_argument('--full', action='store_true', help='Process entire dataset')
-    args = parser.parse_args()
-    
-    max_folders = None if args.full else args.max_folders
-    
-    print(f"Processing {max_folders if max_folders else 'ALL'} folders")
-    
-    # Rest of your pipeline initialization code...
-        
-        # Save detailed image results
-        images_df = pd.DataFrame(detailed_image_results)
-        images_path = self.output_path / "reports" / "detailed_image_results.csv"
-        images_df.to_csv(images_path, index=False)
-        print(f"✓ Detailed image results saved to: {images_path}")
-        
-        # Save model vs CSV comparison
-        comparison_df = pd.DataFrame(comparison_results)
-        comparison_path = self.output_path / "reports" / "model_vs_csv_comparison.csv"
-        comparison_df.to_csv(comparison_path, index=False)
-        print(f"✓ Model vs CSV comparison saved to: {comparison_path}")
-        
-        # Save processing report
-        report_path = self.output_path / "reports" / "processing_report.json"
-        with open(report_path, 'w') as f:
-            json.dump(report, f, indent=2, default=str)
-        print(f"✓ Processing report saved to: {report_path}")
-        
-        # Generate summary visualizations
-        self._create_folder_summary_plots(folder_df, comparison_df, report)
-        
-        print(f"\nResults saved to: {self.output_path}")
-        print(f"Segmented outputs for ConceptCLIP: {self.output_path / 'segmented_for_conceptclip'}")
-        print(f"Folder-level results: {folder_path}")
-        print(f"Image-level results: {images_path}")
-        print(f"Model vs CSV comparison: {comparison_path}")
-        print(f"Processing report: {report_path}")
-    
-    def _create_folder_summary_plots(self, folder_df: pd.DataFrame, 
-                                   comparison_df: pd.DataFrame, report: Dict):
-        """Create summary visualization plots for folder-based processing"""
-        print("Creating folder-based summary visualization plots...")
-        
-        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-        
-        # 1. Folder prediction distribution
-        pred_counts = folder_df['model_prediction'].value_counts()
-        axes[0,0].bar(pred_counts.index, pred_counts.values)
-        axes[0,0].set_title('Folder-Level Disease Prediction Distribution')
-        axes[0,0].tick_params(axis='x', rotation=45)
-        
-        # 2. Confidence distribution (folders)
-        axes[0,1].hist(folder_df['model_confidence'], bins=30, alpha=0.7, color='blue')
-        axes[0,1].set_title('Folder-Level Prediction Confidence Distribution')
-        axes[0,1].set_xlabel('Confidence')
-        axes[0,1].set_ylabel('Number of Folders')
-        
-        # 3. Images per folder distribution
-        axes[0,2].hist(folder_df['num_images'], bins=20, alpha=0.7, color='green')
-        axes[0,2].set_title('Images per Folder Distribution')
-        axes[0,2].set_xlabel('Number of Images')
-        axes[0,2].set_ylabel('Number of Folders')
-        
-        # 4. Model vs CSV comparison
-        match_counts = comparison_df['match_status'].value_counts()
-        axes[1,0].pie(match_counts.values, labels=match_counts.index, autopct='%1.1f%%')
-        axes[1,0].set_title('Model vs CSV Ground Truth Comparison')
-        
-        # 5. Accuracy by confidence level
-        folders_with_gt = folder_df.dropna(subset=['ground_truth'])
-        if len(folders_with_gt) > 0:
-            conf_bins = np.linspace(0, 1, 11)
-            accuracies = []
-            for i in range(len(conf_bins)-1):
-                mask = ((folders_with_gt['model_confidence'] >= conf_bins[i]) & 
-                       (folders_with_gt['model_confidence'] < conf_bins[i+1]))
-                if mask.sum() > 0:
-                    acc = folders_with_gt[mask]['is_correct'].mean()
-                    accuracies.append(acc)
-                else:
-                    accuracies.append(0)
-            
-            axes[1,1].plot(conf_bins[:-1], accuracies, marker='o')
-            axes[1,1].set_title('Accuracy vs Folder Prediction Confidence')
-            axes[1,1].set_xlabel('Prediction Confidence')
-            axes[1,1].set_ylabel('Accuracy')
-        
-        # 6. Processing success rates
-        success_data = [
-            report['folder_level_results']['success_rate'],
-            report['folder_level_results']['accuracy_metrics']['overall_accuracy']
-        ]
-        axes[1,2].bar(['Classification Success', 'Overall Accuracy'], success_data)
-        axes[1,2].set_title('Processing Success Rates')
-        axes[1,2].set_ylim(0, 1)
-        
-        plt.tight_layout()
-        plot_path = self.output_path / "visualizations" / "folder_summary_plots.png"
-        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        
-        print(f"✓ Folder-based summary plots saved to: {plot_path}")
-
-print("✓ SECTION: Updated Pipeline class definition completed successfully")
-print("-"*60)
 
 # ==================== MAIN EXECUTION ====================
 
 def main():
-    """Main execution function with argument parsing for folder-based processing"""
-    print("Starting main execution function for folder-based processing...")
-    
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description='MILK10k Medical Image Processing Pipeline - Folder-based')
-    parser.add_argument('--test', action='store_true', help='Run in test mode (20 folders only)')
-    parser.add_argument('--max-folders', type=int, default=100, help='Maximum number of folders to process (default: 100)')
-    parser.add_argument('--full', action='store_true', help='Process entire dataset (override max-folders)')
+    parser = argparse.ArgumentParser(description='MILK10k Medical Image Processing Pipeline')
+    parser.add_argument('--test', action='store_true', help='Run in test mode (20 folders)')
+    parser.add_argument('--max-folders', type=int, default=100, help='Maximum number of folders to process')
+    parser.add_argument('--full', action='store_true', help='Process entire dataset')
     args = parser.parse_args()
     
     print("✓ Command line arguments parsed successfully")
-    
-    # Determine max_folders
     if args.full:
         max_folders = None
         print("Processing FULL dataset")
@@ -1560,16 +1054,13 @@ def main():
         max_folders = 20
         print(f"TEST mode: Processing {max_folders} folders")
     else:
-        max_folders = args.max_folders  # Default is 100
+        max_folders = args.max_folders
         print(f"Processing {max_folders} folders")
     
     print("="*60)
     print("MILK10K FOLDER-BASED MEDICAL IMAGE PROCESSING PIPELINE")
-    print("Updated with Local Cache Support and CSV Comparison")
-    if max_folders:
-        print(f"🔬 Processing {max_folders} folders")
-    else:
-        print(f"🔬 Processing FULL dataset")
+    print("Updated with Simplified Metrics and Segmentation Evaluation")
+    print(f"🔬 Processing {'FULL dataset' if max_folders is None else f'{max_folders} folders'}")
     print("="*60)
     
     pipeline = MILK10kPipeline(
@@ -1587,27 +1078,24 @@ def main():
     print("✓ SECTION: Dataset processing completed successfully")
     print("-"*60)
     
-    # Print summary
     print("\n" + "="*50)
-    if max_folders:
-        print(f"MILK10K FOLDER-BASED TEST RUN COMPLETE ({max_folders} folders)")
-    else:
-        print("MILK10K FOLDER-BASED PROCESSING COMPLETE")
+    print(f"MILK10K PROCESSING COMPLETE ({'FULL' if max_folders is None else f'{max_folders} folders'})")
     print("="*50)
     print(f"Device used: {report['system_info']['device_used']}")
     print(f"Cache directory: {report['system_info']['cache_directory']}")
     print(f"Offline mode: {report['system_info']['offline_mode']}")
     print(f"Total folders processed: {report['dataset_info']['total_folders_processed']}")
     print(f"Total images processed: {report['dataset_info']['total_images_processed']}")
-    print(f"Average images per folder: {report['dataset_info']['images_per_folder_stats']['mean']:.1f}")
     
-    if report['folder_level_results']['accuracy_metrics']['total_evaluated'] > 0:
-        print(f"Overall folder-level accuracy: {report['folder_level_results']['accuracy_metrics']['overall_accuracy']:.2%}")
+    if report['classification_metrics']['total_evaluated'] > 0:
+        print(f"Classification accuracy: {report['classification_metrics']['overall_accuracy']:.2%}")
+    if report['segmentation_metrics']['num_evaluated'] > 0:
+        print(f"Segmentation metrics: Mean Dice = {report['segmentation_metrics']['mean_dice']:.4f}, Mean IoU = {report['segmentation_metrics']['mean_iou']:.4f}")
     
     print(f"\nKey outputs:")
-    print(f"- Folder-level results: {OUTPUT_PATH}/reports/folder_level_results.csv")
-    print(f"- Model vs CSV comparison: {OUTPUT_PATH}/reports/model_vs_csv_comparison.csv")
-    print(f"- Detailed image results: {OUTPUT_PATH}/reports/detailed_image_results.csv")
+    print(f"- Comparison CSV: {OUTPUT_PATH}/reports/model_vs_groundtruth_comparison.csv")
+    print(f"- Accuracy summary: {OUTPUT_PATH}/reports/accuracy_summary.json")
+    print(f"- Visualization: {OUTPUT_PATH}/visualizations/prediction_distribution.json")
     print(f"- Segmented outputs: {OUTPUT_PATH}/segmented_for_conceptclip/")
     
     print("✓ SECTION: Final summary and output completed successfully")
