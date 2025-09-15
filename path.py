@@ -145,29 +145,25 @@ print("-"*60)
 
 def load_local_sam2_model(model_path: str, device: str):
     """Load local SAM2 model"""
-    try:
-        print(f"Loading SAM2 from local path: {model_path}")
-        
-        # Import SAM2 components
-        sys.path.insert(0, model_path)
-        from sam2.build_sam import build_sam2
-        from sam2.sam2_image_predictor import SAM2ImagePredictor
-        
-        # Load model configuration
-        model_cfg = "sam2_hiera_l.yaml"
-        sam2_checkpoint = os.path.join(model_path, "checkpoints", "sam2_hiera_large.pt")
-        
-        # Build model
-        sam2_model = build_sam2(model_cfg, sam2_checkpoint, device=device)
-        predictor = SAM2ImagePredictor(sam2_model)
-        
-        print(f"SAM2 loaded successfully on {device}")
-        return predictor
-        
-    except Exception as e:
-        print(f"Error loading local SAM2: {e}")
-        print("Creating dummy SAM2 predictor for testing...")
-        return create_dummy_sam_predictor()
+    import sys, os
+    print(f"Loading SAM2 from local path: {model_path}")
+    
+    # Import SAM2 components
+    sys.path.insert(0, model_path)
+    from sam2.build_sam import build_sam2
+    from sam2.sam2_image_predictor import SAM2ImagePredictor
+    
+    # Load model configuration
+    model_cfg = "sam2_hiera_l.yaml"
+    sam2_checkpoint = os.path.join(model_path, "checkpoints", "sam2_hiera_large.pt")
+    
+    # Build model
+    sam2_model = build_sam2(model_cfg, sam2_checkpoint, device=device)
+    predictor = SAM2ImagePredictor(sam2_model)
+    
+    print(f"SAM2 loaded successfully on {device}")
+    return predictor
+
 
 
 
