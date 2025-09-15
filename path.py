@@ -28,6 +28,7 @@ import sys
 import logging
 import time
 from fuzzywuzzy import process
+from scipy import ndimage
 warnings.filterwarnings('ignore')
 
 # Set up Python path for ConceptModel and SAM2 imports
@@ -219,7 +220,7 @@ class MILK10kPipeline:
             level=logging.INFO,
             format='%(asctime)s [%(levelname)s] %(message)s',
             handlers=[
-                logging.FileHandler(output_path / "pipeline.log"),
+                logging.FileHandler(output_path / "logs" / "pipeline.log"),
                 logging.StreamHandler()
             ]
         )
@@ -237,6 +238,7 @@ class MILK10kPipeline:
         self.max_folders = max_folders
         
         self.output_path.mkdir(parents=True, exist_ok=True)
+        (self.output_path / "logs").mkdir(exist_ok=True)
         (self.output_path / "segmented").mkdir(exist_ok=True)
         (self.output_path / "segmented_for_conceptclip").mkdir(exist_ok=True)
         (self.output_path / "classifications").mkdir(exist_ok=True)
@@ -897,7 +899,7 @@ class MILK10kPipeline:
                 lesion_id = folder_result['lesion_id']
                 prediction = folder_result['folder_prediction']['predicted_disease']
                 confidence = folder_result['folder_prediction']['prediction_confidence']
-                status = "✓" if folder_result['is_correct'] else ("✗" if folder_result['ground_truth'] else "-")
+                status = "✓" if folder_result['is_correct'] else ("_union if folder_result['ground_truth'] else "-")
                 csv_status = "CSV✓" if folder_result['csv_match_found'] else "CSV✗"
                 self.logger.info(f"{status} {csv_status} [{folder_idx+1:3d}] {lesion_id}: {prediction} ({confidence:.2%}) [{folder_result['num_images']} imgs]")
             except Exception as e:
@@ -972,7 +974,7 @@ def main():
     logger.info(f"- Results CSV: {OUTPUT_PATH}/reports/results_summary.csv")
     logger.info(f"- Visualization: {OUTPUT_PATH}/visualizations/prediction_distribution.json")
     logger.info(f"- Segmented outputs: {OUTPUT_PATH}/segmented_for_conceptclip/")
-    logger.info(f"- Log file: {OUTPUT_PATH}/pipeline.log")
+    logger.info(f"- Log file: {OUTPUT_PATH}/logs/pipeline.log")
     
     logger.info("✓ SECTION: Final summary and output completed successfully")
     logger.info("✓ PROGRAM EXECUTION COMPLETED SUCCESSFULLY")
