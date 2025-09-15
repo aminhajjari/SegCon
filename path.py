@@ -537,44 +537,38 @@ class MILK10kPipeline:
             clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
             return clahe.apply(image)
     
-    def segment_image(self, image: np.ndarray) -> Tuple[np.ndarray, float]:
-        """Segment image using SAM2 with device-aware processing"""
-        h, w = image.shape[:2]
-        
-        # Adaptive segmentation strategy
-        center_points = self._find_roi_points(image)
-        point_labels = np.ones(len(center_points))
-        
-        # SAM2 segmentation with proper error handling
-        try:
-            with torch.inference_mode():
-                # Device-aware processing
-                if self.device.startswith("cuda") and torch.cuda.is_available():
-                    # GPU processing with mixed precision
-                    with torch.autocast("cuda", dtype=torch.bfloat16):
-                        self.sam_predictor.set_image(image)
-                        masks, scores, _ = self.sam_predictor.predict(
-                            point_coords=center_points,
-                            point_labels=point_labels,
-                            box=None,
-                            multimask_output=True
-                        )
-                else:
-                    # CPU processing
-                    self.sam_predictor.set_image(image)
-                    masks, scores, _ = self.sam_predictor.predict(
-                        point_coords=center_points,
-                        point_labels=point_labels,
-                        box=None,
-                        multimask_output=True
-                    )
-            
-            # Select best mask
-            best_idx = int(np.argmax(scores))
-            mask = masks[best_idx].astype(np.uint8)
-            confidence = float(scores[best_idx])
-            
-            return mask, confidence
+    def segment_image(self, image):
+    """
+    Automatic segmentation with SAM2 using a center-point prompt.
+    """
+    self.segment_model.eval()
+
+    # === Convert image to tensor if not already ===
+    if isinstance(image, np.ndarray):
+        image_tensor = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0).float().to(self.device)
+    else:
+        image_tensor = image.to(self.device)
+
+    # === Create automatic point prompt at image center ===
+    h, w = image_tensor.shape[-2:]
+    center_point = np.array([[w // 2, h // 2]])  # (x, y) format
+    point_labels = np.array([1])  # 1 = positive click
+
+    with torch.no_grad():
+        outputs = self.segment_model(
+            image=image_tensor,
+            point_coords=torch.from_numpy(center_point).unsqueeze(0).to(self.device),
+            point_labels=torch.from_numpy(point_labels).unsqueeze(0).to(self.device),
+            multimask_output=True  # get multiple candidate masks
+        )
+
+    # === Select the best mask based on IoU prediction ===
+    masks = outputs["masks"]            # [B, num_masks, H, W]
+    scores = outputs["iou_predictions"] # [B, num_masks]
+    best_idx = torch.argmax(scores, dim=1)
+    best_mask = masks[0, best_idx].cpu().numpy().astype(np.uint8)
+
+    return best_mask
             
         except Exception as e:
             print(f"SAM2 segmentation error: {e}")
