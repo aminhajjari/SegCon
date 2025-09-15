@@ -1095,54 +1095,110 @@ class MILK10kPipeline:
         print("✓ Folder-based report statistics calculated successfully")
         return report
     
-    def _save_folder_results(self, results: List[Dict], report: Dict):
-        """Save results and report for folder-based processing"""
-        print("Saving folder-based results and generating visualizations...")
+    # Add this method to your MILK10kPipeline class to improve the comparison output
+
+def _save_folder_results(self, results: List[Dict], report: Dict):
+    """Save results with improved comparison format"""
+    print("Saving folder-based results and generating comparison CSV...")
+    
+    # Create the main comparison CSV that matches your requirements
+    comparison_data = []
+    
+    for folder_result in results:
+        lesion_id = folder_result['lesion_id']
         
-        # Create detailed folder-level results
-        folder_summary = []
-        detailed_image_results = []
-        comparison_results = []  # New: For model vs CSV comparison
+        # Get model prediction
+        model_prediction = folder_result['folder_prediction']['predicted_disease']
+        model_confidence = folder_result['folder_prediction']['prediction_confidence']
         
-        for folder_result in results:
-            lesion_id = folder_result['lesion_id']
-            
-            # Folder-level summary
-            folder_summary.append({
-                'lesion_id': lesion_id,
-                'num_images': folder_result['num_images'],
-                'model_prediction': folder_result['folder_prediction']['predicted_disease'],
-                'model_confidence': folder_result['folder_prediction']['prediction_confidence'],
+        # Get ground truth from CSV
+        ground_truth = folder_result['ground_truth']
+        
+        # Map disease names back to CSV codes for comparison
+        reverse_mapping = {v: k for k, v in self.domain.label_mappings.items()}
+        model_prediction_code = reverse_mapping.get(model_prediction, model_prediction)
+        ground_truth_code = reverse_mapping.get(ground_truth, ground_truth) if ground_truth else None
+        
+        # Determine correctness
+        is_correct = (model_prediction == ground_truth) if ground_truth else None
+        
+        comparison_data.append({
+            'lesion_id': lesion_id,
+            'ground_truth_disease_name': ground_truth if ground_truth else 'NOT_FOUND_IN_CSV',
+            'ground_truth_code': ground_truth_code if ground_truth_code else 'NOT_FOUND',
+            'model_predicted_disease_name': model_prediction,
+            'model_predicted_code': model_prediction_code,
+            'model_confidence': f"{model_confidence:.4f}",
+            'is_correct': is_correct,
+            'match_status': 'CORRECT' if is_correct else ('WRONG' if ground_truth else 'NO_CSV_ENTRY'),
+            'num_images_in_folder': folder_result['num_images']
+        })
+    
+    # Save the main comparison CSV
+    comparison_df = pd.DataFrame(comparison_data)
+    comparison_path = self.output_path / "reports" / "model_vs_groundtruth_comparison.csv"
+    comparison_df.to_csv(comparison_path, index=False)
+    
+    # Create summary statistics
+    if len(comparison_data) > 0:
+        total_folders = len(comparison_data)
+        folders_with_csv_match = sum(1 for item in comparison_data if item['match_status'] != 'NO_CSV_ENTRY')
+        correct_predictions = sum(1 for item in comparison_data if item['is_correct'] is True)
+        
+        accuracy = correct_predictions / folders_with_csv_match if folders_with_csv_match > 0 else 0
+        
+        # Save summary
+        summary_data = {
+            'total_folders_processed': total_folders,
+            'folders_found_in_csv': folders_with_csv_match,
+            'folders_not_in_csv': total_folders - folders_with_csv_match,
+            'correct_predictions': correct_predictions,
+            'wrong_predictions': folders_with_csv_match - correct_predictions,
+            'accuracy_percentage': f"{accuracy * 100:.2f}%",
+            'model_confidence_avg': np.mean([float(item['model_confidence']) for item in comparison_data])
+        }
+        
+        summary_path = self.output_path / "reports" / "accuracy_summary.json"
+        with open(summary_path, 'w') as f:
+            json.dump(summary_data, f, indent=2, default=str)
+    
+    print(f"✓ Model vs Ground Truth comparison saved to: {comparison_path}")
+    print(f"✓ Accuracy summary saved to: {summary_path}")
+    
+    # Also save detailed results for debugging
+    detailed_results = []
+    for folder_result in results:
+        for img_result in folder_result['individual_images']:
+            detailed_results.append({
+                'lesion_id': img_result['lesion_id'],
+                'image_name': img_result['image_name'],
+                'individual_prediction': img_result['predicted_disease'],
+                'individual_confidence': img_result['prediction_confidence'],
+                'folder_final_prediction': folder_result['folder_prediction']['predicted_disease'],
+                'folder_confidence': folder_result['folder_prediction']['prediction_confidence'],
                 'ground_truth': folder_result['ground_truth'],
-                'is_correct': folder_result['is_correct'],
-                'csv_match_found': folder_result['csv_match_found'],
-                'majority_vote_prediction': folder_result['folder_prediction'].get('majority_vote_prediction', ''),
-                'aggregation_method': folder_result['folder_prediction'].get('aggregation_method', '')
+                'folder_is_correct': folder_result['is_correct']
             })
-            
-            # Model vs CSV comparison
-            comparison_results.append({
-                'lesion_id': lesion_id,
-                'model_decision': folder_result['folder_prediction']['predicted_disease'],
-                'csv_ground_truth': folder_result['ground_truth'] if folder_result['ground_truth'] else 'NOT_FOUND',
-                'match_status': 'CORRECT' if folder_result['is_correct'] else (
-                    'INCORRECT' if folder_result['ground_truth'] else 'NO_CSV_ENTRY'),
-                'model_confidence': folder_result['folder_prediction']['prediction_confidence'],
-                'num_images_in_folder': folder_result['num_images']
-            })
-            
-            # Individual image results
-            for img_result in folder_result['individual_images']:
-                img_result['folder_ground_truth'] = folder_result['ground_truth']
-                img_result['folder_prediction'] = folder_result['folder_prediction']['predicted_disease']
-                img_result['folder_is_correct'] = folder_result['is_correct']
-                detailed_image_results.append(img_result)
-        
-        # Save folder-level summary
-        folder_df = pd.DataFrame(folder_summary)
-        folder_path = self.output_path / "reports" / "folder_level_results.csv"
-        folder_df.to_csv(folder_path, index=False)
-        print(f"✓ Folder-level results saved to: {folder_path}")
+    
+    detailed_df = pd.DataFrame(detailed_results)
+    detailed_path = self.output_path / "reports" / "detailed_image_results.csv"
+    detailed_df.to_csv(detailed_path, index=False)
+    
+    print(f"✓ Detailed results saved to: {detailed_path}")
+
+# Also update the main function to ensure 50 folders
+def main():
+    """Main execution function"""
+    parser = argparse.ArgumentParser(description='MILK10k Medical Image Processing Pipeline')
+    parser.add_argument('--max-folders', type=int, default=50, help='Maximum number of folders to process (default: 50)')
+    parser.add_argument('--full', action='store_true', help='Process entire dataset')
+    args = parser.parse_args()
+    
+    max_folders = None if args.full else args.max_folders
+    
+    print(f"Processing {max_folders if max_folders else 'ALL'} folders")
+    
+    # Rest of your pipeline initialization code...
         
         # Save detailed image results
         images_df = pd.DataFrame(detailed_image_results)
