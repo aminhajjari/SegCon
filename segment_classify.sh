@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=milk10k_pipeline
+#SBATCH --job-name=SegCon
 #SBATCH --account=def-arashmoh
 #SBATCH --nodes=1
 #SBATCH --gpus=1
