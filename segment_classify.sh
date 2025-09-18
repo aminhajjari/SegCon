@@ -8,7 +8,7 @@
 #SBATCH --output=/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegConOutputs/logs/milk10k_%j.out
 #SBATCH --error=/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegConOutputs/logs/milk10k_%j.err
 
-module load python/3.10
+module load python/3.11
 module load cuda/11.7
 export TRANSFORMERS_OFFLINE=1
 export HF_HUB_OFFLINE=1
