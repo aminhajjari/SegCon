@@ -219,7 +219,7 @@ class MILK10kPipeline:
             level=logging.INFO,
             format='%(asctime)s [%(levelname)s] %(message)s',
             handlers=[
-                logging.FileHandler(output_path / "logs" / "pipeline.log"),
+                logging.FileHandler(self.output_path / "logs" / "pipeline.log"),
                 logging.StreamHandler()
             ]
         )
