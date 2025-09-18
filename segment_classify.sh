@@ -1,10 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=SegCon
 #SBATCH --account=def-arashmoh
+#SBATCH --time=01:00:00 
+#SBATCH --mem=32G
 #SBATCH --nodes=1
-#SBATCH --gpus=1
-#SBATCH --mem=128G
-#SBATCH --time=12:00:00
+#SBATCH --gres=gpu:a100:1
+#SBATCH --cpus-per-task=4 
 #SBATCH --output=/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegConOutputs/logs/milk10k_%j.out
 #SBATCH --error=/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegConOutputs/logs/milk10k_%j.err
 
