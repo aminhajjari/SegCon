@@ -215,6 +215,14 @@ class MILK10kPipeline:
     def __init__(self, dataset_path: str, groundtruth_path: str, output_path: str, 
                  sam2_model_path: str = None, conceptclip_model_path: str = None,
                  cache_path: str = None, max_folders: int = None):
+        
+        # FIX: Assign self.output_path first
+        self.output_path = Path(output_path)
+        
+        # Ensure the logs directory exists before setting up the file handler
+        log_dir = self.output_path / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s [%(levelname)s] %(message)s',
@@ -223,21 +231,21 @@ class MILK10kPipeline:
                 logging.StreamHandler()
             ]
         )
+        
         self.logger = logging.getLogger(__name__)
         torch.manual_seed(42)  # For reproducibility
         self.logger.info("Initializing MILK10k Pipeline...")
         self.dataset_path = Path(dataset_path)
         self.groundtruth_path = groundtruth_path
         self.masks_path = MASKS_PATH
-        self.output_path = Path(output_path)
         self.sam2_model_path = sam2_model_path or SAM2_MODEL_PATH
         self.conceptclip_model_path = conceptclip_model_path or CONCEPTCLIP_MODEL_PATH
         self.cache_path = cache_path or HUGGINGFACE_CACHE_PATH
         self.domain = MILK10K_DOMAIN
         self.max_folders = max_folders
         
+        # The other directory creations can remain, but it's good practice to ensure they exist as well
         self.output_path.mkdir(parents=True, exist_ok=True)
-        (self.output_path / "logs").mkdir(exist_ok=True)
         (self.output_path / "segmented").mkdir(exist_ok=True)
         (self.output_path / "segmented_for_conceptclip").mkdir(exist_ok=True)
         (self.output_path / "classifications").mkdir(exist_ok=True)
