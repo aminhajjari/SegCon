@@ -92,17 +92,68 @@ def setup_gpu_environment():
 def load_local_sam2_model(model_path: str, device: str):
     logger = logging.getLogger(__name__)
     logger.info(f"Loading SAM2 from local path: {model_path}")
-    model_cfg = os.path.join(model_path, "sam2_configs", "sam2_hiera_l.yaml")
+    
+    # Search for config file in possible locations
+    possible_config_paths = [
+        "sam2/configs/sam2/sam2_hiera_l.yaml",           # Most likely location
+        "sam2/configs/sam2.1/sam2.1_hiera_l.yaml",       # Alternative version
+        "sam2_configs/sam2_hiera_l.yaml",                # Original expected location
+        "configs/sam2_hiera_l.yaml",                     # Another possible location
+        "sam2/configs/sam2_hiera_b.yaml",                # Base model alternative
+        "sam2/configs/sam2_hiera_s.yaml"                 # Small model alternative
+    ]
+    
+    model_cfg = None
+    for config_path in possible_config_paths:
+        full_path = os.path.join(model_path, config_path)
+        if os.path.exists(full_path):
+            model_cfg = full_path
+            logger.info(f"Found config file: {model_cfg}")
+            break
+    
+    if model_cfg is None:
+        # List available YAML files to help debug
+        logger.error("Config file not found. Searching for available YAML files...")
+        import glob
+        yaml_files = glob.glob(os.path.join(model_path, "**", "*.yaml"), recursive=True)
+        for yaml_file in yaml_files[:10]:  # Show first 10
+            logger.info(f"  Available YAML: {yaml_file}")
+        
+        # Also check the sam2 directory structure
+        sam2_dir = os.path.join(model_path, "sam2")
+        if os.path.exists(sam2_dir):
+            logger.info(f"Contents of sam2 directory:")
+            for item in os.listdir(sam2_dir):
+                logger.info(f"  - {item}")
+        
+        raise FileNotFoundError("SAM2 config file not found. Check the YAML files listed above.")
+    
+    # Check checkpoint file
     sam2_checkpoint = os.path.join(model_path, "checkpoints", "sam2_hiera_large.pt")
+    if not os.path.exists(sam2_checkpoint):
+        logger.error(f"Checkpoint file not found: {sam2_checkpoint}")
+        # List available checkpoints
+        checkpoints_dir = os.path.join(model_path, "checkpoints")
+        if os.path.exists(checkpoints_dir):
+            logger.info("Available checkpoint files:")
+            for item in os.listdir(checkpoints_dir):
+                if item.endswith(('.pt', '.pth')):
+                    logger.info(f"  - {item}")
+        raise FileNotFoundError(f"SAM2 checkpoint file not found: {sam2_checkpoint}")
     
-    if not os.path.exists(model_cfg) or not os.path.exists(sam2_checkpoint):
-        logger.error(f"Missing SAM2 files: config={model_cfg}, checkpoint={sam2_checkpoint}")
-        raise FileNotFoundError("SAM2 model files not found")
+    logger.info(f"Using config: {model_cfg}")
+    logger.info(f"Using checkpoint: {sam2_checkpoint}")
     
-    sam2_model = build_sam2(model_cfg, sam2_checkpoint, device=device)
-    predictor = SAM2ImagePredictor(sam2_model)
-    logger.info(f"✅ SAM2 loaded successfully on {device}")
-    return predictor
+    try:
+        sam2_model = build_sam2(model_cfg, sam2_checkpoint, device=device)
+        predictor = SAM2ImagePredictor(sam2_model)
+        logger.info(f"✅ SAM2 loaded successfully on {device}")
+        return predictor
+    except Exception as e:
+        logger.error(f"Failed to build SAM2 model: {e}")
+        logger.error(f"Config used: {model_cfg}")
+        logger.error(f"Checkpoint used: {sam2_checkpoint}")
+        raise e
 
 # Offline Setup
 def setup_offline_environment(cache_path: str):
