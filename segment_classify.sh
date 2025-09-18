@@ -10,6 +10,7 @@
 
 module load python/3.11
 module load cuda/11.7
+module load opencv/4.12.0
 export TRANSFORMERS_OFFLINE=1
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_CACHE=/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/huggingface_cache
