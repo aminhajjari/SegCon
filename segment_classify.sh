@@ -9,10 +9,13 @@
 #SBATCH --output=/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegConOutputs/logs/milk10k_%j.out
 #SBATCH --error=/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegConOutputs/logs/milk10k_%j.err
 
-# Load modules - MUST match what's in your venv
-module load python/3.11.5
-module load cuda/11.7
+# Load modules in the EXACT sequence that worked
+# DO NOT change this order - it matches what we tested successfully
+module load StdEnv/2023
+module load gcc/12.3  
+module load cuda/12.6
 module load opencv/4.12.0
+module load python/3.11.5
 
 # Environment variables
 export TRANSFORMERS_OFFLINE=1
@@ -35,7 +38,10 @@ source /project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/venv/bin/activa
 # Verify environment
 echo "Python version: $(python --version)"
 echo "Python path: $(which python)"
+echo "Current modules loaded:"
+module list
 python -c "import cv2; print('OpenCV version:', cv2.__version__)" || echo "OpenCV import failed"
+python -c "import torch; print('PyTorch version:', torch.__version__); print('CUDA available:', torch.cuda.is_available())" || echo "PyTorch import failed"
 
 # Run your script
 python /project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegCon/path.py --test
