@@ -918,7 +918,7 @@ class MILK10kPipeline:
 def main():
     parser = argparse.ArgumentParser(description='MILK10k Medical Image Processing Pipeline')
     parser.add_argument('--test', action='store_true', help='Run in test mode (20 folders)')
-    parser.add_argument('--max-folders', type=int, default=100, help='Maximum number of folders to process')
+    parser.add_argument('--max-folders', type=int, default=50, help='Maximum number of folders to process')
     parser.add_argument('--full', action='store_true', help='Process entire dataset')
     args = parser.parse_args()
     
