@@ -155,7 +155,7 @@ class MILK10kPipeline:
             print("="*60)
     
     def _load_sam2(self):
-    """Load SAM2 model"""
+    """Load SAM2 model&"""
     sys.path.insert(0, SAM2_MODEL_PATH)
     
     try:
