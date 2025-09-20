@@ -20,12 +20,12 @@ warnings.filterwarnings('ignore')
 
 # ============== CONFIGURATION ==============
 # UPDATE THESE PATHS TO MATCH YOUR SETUP
-DATASET_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_Input"
-GROUNDTRUTH_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_GroundTruth.csv"
-MASKS_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_Masks"  # Optional
-OUTPUT_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegConOutputs"
-SAM2_MODEL_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/segment-anything-2"
-CONCEPTCLIP_MODEL_PATH = "/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/ConceptModel"
+DATASET_PATH = "/lustre06/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_Input"
+GROUNDTRUTH_PATH = "/lustre06/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_GroundTruth.csv"
+MASKS_PATH = "/lustre06/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/MILK10k_Training_Masks"
+OUTPUT_PATH = "/lustre06/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegConOutputs"
+SAM2_MODEL_PATH = "/lustre06/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/segment-anything-2"
+CONCEPTCLIP_MODEL_PATH = "/lustre06/project/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/ConceptModel"
 
 # Domain configuration for MILK10k
 LABEL_MAPPINGS = {
