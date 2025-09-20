@@ -8,6 +8,7 @@
 #SBATCH --output=/home/shahab33/projects/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegConOutputs/logs/milk10k_%j.out
 #SBATCH --error=/home/shahab33/projects/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegConOutputs/logs/milk10k_%j.err
 
+
 # Load modules
 module load StdEnv/2023
 module load gcc/12.3
