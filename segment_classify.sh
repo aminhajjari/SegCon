@@ -55,11 +55,10 @@ echo "Starting pipeline for 50 folders"
 echo "======================================"
 
 # Run the pipeline script
-# IMPORTANT: Update 'pipeline.py' to your actual script name
-# New (correct) line
 python -u path.py \
     --max-folders 50 \
     2>&1 | tee /home/shahab33/projects/def-arashmoh/shahab33/XAI/MILK10k_Training_Input/SegConOutputs/logs/pipeline_output_${SLURM_JOB_ID}.log
+
 echo "======================================"
 echo "Pipeline completed"
 echo "Job ID: ${SLURM_JOB_ID}"
