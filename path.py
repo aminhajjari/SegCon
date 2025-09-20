@@ -155,57 +155,63 @@ class MILK10kPipeline:
             print("="*60)
     
     def _load_sam2(self):
-        """Load SAM2 model"""
-        sys.path.insert(0, SAM2_MODEL_PATH)
-        
-        try:
-            from sam2.build_sam import build_sam2
-            from sam2.sam2_image_predictor import SAM2ImagePredictor
-            if self.debug_mode:
-                print("✓ SAM2 modules imported")
-        except ImportError as e:
-            raise ImportError(f"Cannot import SAM2: {e}")
-        
-        # Find checkpoint
-        checkpoint_dir = os.path.join(SAM2_MODEL_PATH, "checkpoints")
-        checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.endswith(('.pt', '.pth'))]
-        if not checkpoint_files:
-            raise FileNotFoundError(f"No checkpoint files in {checkpoint_dir}")
-        checkpoint_path = os.path.join(checkpoint_dir, checkpoint_files[0])
-        
-        # Find config
-        config_path = None
-        possible_configs = [
-            os.path.join(SAM2_MODEL_PATH, "sam2", "configs", "sam2", "sam2_hiera_l.yaml"),
-            os.path.join(SAM2_MODEL_PATH, "sam2", "configs", "sam2.1", "sam2.1_hiera_l.yaml"),
-            os.path.join(SAM2_MODEL_PATH, "configs", "sam2_hiera_l.yaml"),
-        ]
-        
-        for path in possible_configs:
-            if os.path.exists(path):
-                config_path = path
-                break
-        
-        if not config_path:
-            import glob
-            yaml_files = glob.glob(os.path.join(SAM2_MODEL_PATH, "**", "*.yaml"), recursive=True)
-            if yaml_files:
-                config_path = yaml_files[0]  # Use first found
-            else:
-                raise FileNotFoundError("No config file found for SAM2")
-        
+    """Load SAM2 model"""
+    sys.path.insert(0, SAM2_MODEL_PATH)
+    
+    try:
+        from sam2.build_sam import build_sam2
+        from sam2.sam2_image_predictor import SAM2ImagePredictor
         if self.debug_mode:
-            print(f"  Config: {os.path.basename(config_path)}")
-            print(f"  Checkpoint: {os.path.basename(checkpoint_path)}")
+            print("✓ SAM2 modules imported")
+    except ImportError as e:
+        raise ImportError(f"Cannot import SAM2: {e}")
+    
+    # Find checkpoint
+    checkpoint_dir = os.path.join(SAM2_MODEL_PATH, "checkpoints")
+    checkpoint_path = os.path.join(checkpoint_dir, "sam2_hiera_large.pt")
+    
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+    
+    # Use the config name relative to the configs directory
+    # SAM2's build_sam2 expects just the config name, not the full path
+    config_name = "sam2/sam2_hiera_l.yaml"
+    
+    if self.debug_mode:
+        print(f"  Config: {config_name}")
+        print(f"  Checkpoint: sam2_hiera_large.pt")
+    
+    # Build model
+    try:
+        sam2_model = build_sam2(config_name, checkpoint_path, device=self.device)
+        self.sam_predictor = SAM2ImagePredictor(sam2_model)
+        if self.debug_mode:
+            print("✓ SAM2 model loaded successfully")
+    except Exception as e:
+        if self.debug_mode:
+            print(f"  First attempt failed: {e}")
+            print("  Trying with Hydra initialization...")
         
-        # Build model
+        # If that fails, try with explicit Hydra initialization
         try:
-            sam2_model = build_sam2(config_path, checkpoint_path, device=self.device)
+            from hydra import initialize_config_dir, compose
+            from hydra.core.global_hydra import GlobalHydra
+            
+            # Clear any existing Hydra instance
+            if GlobalHydra.instance().is_initialized():
+                GlobalHydra.instance().clear()
+            
+            # Initialize with the SAM2 configs directory
+            config_dir = os.path.join(SAM2_MODEL_PATH, "sam2", "configs")
+            with initialize_config_dir(config_dir=config_dir, version_base=None):
+                cfg = compose(config_name=config_name)
+                sam2_model = build_sam2(cfg, checkpoint_path, device=self.device)
+            
             self.sam_predictor = SAM2ImagePredictor(sam2_model)
             if self.debug_mode:
-                print("✓ SAM2 model loaded successfully")
-        except Exception as e:
-            raise RuntimeError(f"Failed to build SAM2: {e}")
+                print("✓ SAM2 model loaded successfully with Hydra")
+        except Exception as e2:
+            raise RuntimeError(f"Failed to build SAM2. Error 1: {e}, Error 2: {e2}")
     
     def _load_conceptclip(self):
         """Load ConceptCLIP model"""
