@@ -1,3 +1,4 @@
+#!/bin/bash
 #SBATCH --job-name=SegCon_MILK10k
 #SBATCH --account=def-arashmoh
 #SBATCH --time=04:00:00
